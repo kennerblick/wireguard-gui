@@ -1,5 +1,7 @@
 import hmac
 import ipaddress
+import json
+import math
 import os
 import re
 import sqlite3
@@ -354,6 +356,78 @@ def list_remote_wgacl_chains():
     return True, [c for c in out.split() if c]
 
 
+def fetch_wg_peers_from_config():
+    """Liest die WireGuard-Config auf dem Ziel und extrahiert je Peer Name,
+    PublicKey und AllowedIPs.
+
+    Namenskonvention: die erste Zeile direkt unter [Peer] ist ein Kommentar
+    mit dem Anzeigenamen der Verbindung, z.B.:
+
+        [Peer]
+        #Buero-Router
+        PublicKey = ...
+        AllowedIPs = 10.250.0.5/32
+
+    Gibt eine Liste von dicts {"name", "pubkey", "allowed_ips"} zurueck
+    (leere Liste, falls die Config nicht lesbar ist).
+    """
+    ok, out = run_on_target(f"cat /etc/wireguard/{TARGET_WG_INTERFACE}.conf 2>/dev/null")
+    if not ok or not out.strip():
+        return []
+
+    peers = []
+    current = None
+    first_line_of_block = False
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            if current is not None:
+                peers.append(current)
+            if line.lower() == "[peer]":
+                current = {"name": None, "pubkey": None, "allowed_ips": None}
+                first_line_of_block = True
+            else:
+                current = None
+                first_line_of_block = False
+            continue
+        if current is None:
+            continue
+        if first_line_of_block:
+            if line.startswith("#"):
+                current["name"] = line.lstrip("#").strip() or None
+            first_line_of_block = False
+        if line.lower().startswith("publickey"):
+            current["pubkey"] = line.partition("=")[2].strip()
+        elif line.lower().startswith("allowedips"):
+            current["allowed_ips"] = line.partition("=")[2].strip()
+    if current is not None:
+        peers.append(current)
+    return peers
+
+
+def peer_lookup_maps():
+    """Baut pubkey->Name und ip->Name aus der WireGuard-Config des Ziels.
+
+    Fehlt der Namens-Kommentar fuer einen Peer, wird er einfach ausgelassen
+    (Aufrufer fallen dann auf IP/Pubkey als Anzeige zurueck).
+    """
+    pubkey_to_name = {}
+    ip_to_name = {}
+    for peer in fetch_wg_peers_from_config():
+        name = peer.get("name")
+        if not name:
+            continue
+        if peer.get("pubkey"):
+            pubkey_to_name[peer["pubkey"]] = name
+        first_allowed = (peer.get("allowed_ips") or "").split(",")[0].strip()
+        ip = first_allowed.split("/")[0] if first_allowed else None
+        if ip:
+            ip_to_name[ip] = name
+    return pubkey_to_name, ip_to_name
+
+
 # --------------------------------------------------------------------------
 # Routen
 # --------------------------------------------------------------------------
@@ -378,6 +452,11 @@ def index():
     services_flat = db.execute("SELECT * FROM services ORDER BY is_builtin DESC, name").fetchall()
     hook_chain = detect_hook_chain() if wg_error is None else None
     ip_forward = check_ip_forward() if wg_error is None else None
+
+    if peers:
+        pubkey_to_name, _ = peer_lookup_maps()
+        for p in peers:
+            p["name"] = pubkey_to_name.get(p["pubkey"], "")
 
     return render_template(
         "index.html",
@@ -613,6 +692,198 @@ def cleanup_orphaned_chains():
     if not removed and not errors:
         flash("Keine verwaisten Chains gefunden.", "success")
     return redirect(url_for("maintenance"))
+
+
+def get_all_ports_service_id(db):
+    row = db.execute(
+        "SELECT id FROM services WHERE protocol = 'all' AND port IS NULL LIMIT 1"
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def diff_target_sets(existing: set, desired: set):
+    """Reine Diff-Logik fuer die Berechtigungsmatrix: (hinzuzufuegen, zu entfernen)."""
+    return desired - existing, existing - desired
+
+
+def build_netzplan_data(db):
+    """Baut Knoten (Peers) und Kanten (Regeln) fuer den Netzplan.
+
+    Knoten: alle erfassten Clients + alle Ziel-IPs aus Regeln (inkl. "any"
+    als eigener Pseudo-Knoten "Internet / alle Ziele"), kreisfoermig
+    angeordnet. Kanten: eine je (Quelle, Ziel)-Paar, mit allen dafuer
+    erlaubten Diensten zusammengefasst (fuer den Hover-Tooltip). Fuer
+    uneingeschraenkte Clients werden keine Kanten gezeichnet (sie duerfen
+    ohnehin ueberallhin) - sie werden stattdessen optisch hervorgehoben.
+    """
+    clients = db.execute("SELECT * FROM clients ORDER BY wg_ip").fetchall()
+    rules = db.execute(
+        """
+        SELECT c.wg_ip AS src_ip, r.dest_ip, s.name AS service_name
+        FROM rules r
+        JOIN clients c ON r.client_id = c.id
+        JOIN services s ON r.service_id = s.id
+        """
+    ).fetchall()
+
+    _, ip_to_name = peer_lookup_maps()
+    client_by_ip = {c["wg_ip"]: c for c in clients}
+
+    def label_for(ip):
+        if ip in client_by_ip:
+            return client_by_ip[ip]["label"]
+        return ip_to_name.get(ip, ip)
+
+    ordered_ips = [c["wg_ip"] for c in clients]
+    seen_ips = set(ordered_ips)
+    show_internet_node = False
+    edge_map = {}
+    for r in rules:
+        dest = r["dest_ip"]
+        if dest == "any":
+            show_internet_node = True
+            dest_key = "__any__"
+        else:
+            dest_key = dest
+            if dest_key not in seen_ips:
+                seen_ips.add(dest_key)
+                ordered_ips.append(dest_key)
+        edge_map.setdefault((r["src_ip"], dest_key), []).append(r["service_name"])
+
+    if show_internet_node:
+        ordered_ips.append("__any__")
+
+    n = len(ordered_ips)
+    cx, cy, radius = 320, 300, 235
+    positions = {}
+    nodes = []
+    for i, ip in enumerate(ordered_ips):
+        angle = (2 * math.pi * i / n) - (math.pi / 2) if n else 0
+        x = cx + radius * math.cos(angle)
+        y = cy + radius * math.sin(angle)
+        client = client_by_ip.get(ip)
+        label = "Internet / alle Ziele" if ip == "__any__" else label_for(ip)
+        positions[ip] = (x, y)
+        nodes.append({
+            "ip": ip,
+            "x": round(x, 1),
+            "y": round(y, 1),
+            "label": label,
+            "unrestricted": bool(client and not client["restricted"]),
+            "is_client": ip in client_by_ip,
+        })
+
+    edges = []
+    for (src_ip, dest_key), services in edge_map.items():
+        if src_ip not in positions or dest_key not in positions:
+            continue
+        x1, y1 = positions[src_ip]
+        x2, y2 = positions[dest_key]
+        edges.append({
+            "x1": round(x1, 1), "y1": round(y1, 1),
+            "x2": round(x2, 1), "y2": round(y2, 1),
+            "src_label": label_for(src_ip),
+            "dest_label": "Internet / alle Ziele" if dest_key == "__any__" else label_for(dest_key),
+            "services": ", ".join(sorted(set(services))),
+        })
+
+    return nodes, edges
+
+
+@app.route("/netzplan")
+def netzplan():
+    db = get_db()
+    nodes, edges = build_netzplan_data(db)
+
+    restricted_clients = db.execute(
+        "SELECT * FROM clients WHERE restricted = 1 ORDER BY label"
+    ).fetchall()
+    all_clients = db.execute("SELECT * FROM clients ORDER BY label").fetchall()
+
+    _, ip_to_name = peer_lookup_maps()
+    target_by_ip = {c["wg_ip"]: c["label"] for c in all_clients}
+    for ip, name in ip_to_name.items():
+        target_by_ip.setdefault(ip, name)
+    all_targets = [{"ip": ip, "label": label} for ip, label in sorted(target_by_ip.items(), key=lambda kv: kv[1])]
+
+    all_ports_service_id = get_all_ports_service_id(db)
+    client_targets = {}
+    if all_ports_service_id is not None:
+        for c in restricted_clients:
+            rows = db.execute(
+                "SELECT dest_ip FROM rules WHERE client_id = ? AND service_id = ?",
+                (c["id"], all_ports_service_id),
+            ).fetchall()
+            client_targets[c["id"]] = [row["dest_ip"] for row in rows]
+
+    return render_template(
+        "netzplan.html",
+        nodes=nodes,
+        edges=edges,
+        restricted_clients=restricted_clients,
+        all_clients_json=json.dumps([
+            {"id": c["id"], "label": c["label"], "wg_ip": c["wg_ip"]} for c in restricted_clients
+        ]),
+        all_targets_json=json.dumps(all_targets),
+        client_targets_json=json.dumps(client_targets),
+    )
+
+
+@app.route("/netzplan/permissions/set", methods=["POST"])
+def set_full_access_targets():
+    db = get_db()
+    client_id = int(request.form["client_id"])
+    client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        flash("Client nicht gefunden.", "error")
+        return redirect(url_for("netzplan"))
+    if not client["restricted"]:
+        flash(f"{client['label']} ist uneingeschraenkt - hat bereits Zugriff auf alles.", "error")
+        return redirect(url_for("netzplan"))
+
+    all_ports_service_id = get_all_ports_service_id(db)
+    if all_ports_service_id is None:
+        flash("Dienst 'Alle Ports' nicht gefunden - Datenbank inkonsistent.", "error")
+        return redirect(url_for("netzplan"))
+
+    desired = set()
+    for raw_ip in request.form.getlist("targets"):
+        ip = raw_ip.strip()
+        if not ip or ip == client["wg_ip"]:
+            continue
+        if validate_dest_ip(ip) is None:
+            flash(f"Ungueltiges Ziel ignoriert: {ip!r}", "error")
+            continue
+        desired.add(ip)
+
+    existing_rows = db.execute(
+        "SELECT id, dest_ip FROM rules WHERE client_id = ? AND service_id = ?",
+        (client_id, all_ports_service_id),
+    ).fetchall()
+    existing_by_ip = {row["dest_ip"]: row["id"] for row in existing_rows}
+
+    added, removed = diff_target_sets(set(existing_by_ip.keys()), desired)
+
+    for ip in added:
+        db.execute(
+            "INSERT INTO rules (client_id, dest_ip, service_id, created_at) VALUES (?, ?, ?, ?)",
+            (client_id, ip, all_ports_service_id, datetime.datetime.utcnow().isoformat()),
+        )
+    for ip in removed:
+        db.execute("DELETE FROM rules WHERE id = ?", (existing_by_ip[ip],))
+    if added or removed:
+        db.commit()
+        ok, out = apply_client(db, client)
+        if ok:
+            flash(
+                f"{client['label']}: {len(added)} Ziel(e) hinzugefuegt, {len(removed)} entfernt, angewendet.",
+                "success",
+            )
+        else:
+            flash(f"{client['label']}: Aenderungen gespeichert, aber Anwenden fehlgeschlagen: {out}", "error")
+    else:
+        flash("Keine Aenderung.", "success")
+    return redirect(url_for("netzplan"))
 
 
 def reapply_all_on_startup():

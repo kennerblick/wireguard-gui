@@ -60,7 +60,8 @@ app/app.py              - komplette Anwendungslogik (Routen, DB,
                           run_on_target()=SSH- oder lokale Ausfuehrung,
                           iptables-Script-Generierung, Basic-Auth, Validierung)
 app/templates/          - Jinja2-Templates (base, index=Dashboard, services,
-                          maintenance=verwaiste Chains)
+                          maintenance=verwaiste Chains, netzplan=Graph +
+                          Berechtigungsmatrix)
 app/static/style.css    - Styling
 tests/                  - pytest-Suite fuer Script-Generierung, Validierung,
                           Hook-Erkennung (kein echter SSH-/WG-Zugriff noetig)
@@ -128,6 +129,26 @@ zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
   `/maintenance/cleanup`).
 - **`fetch_wg_status()`** überspringt Zeilen mit unerwartetem Format statt
   mit einem Exception abzustürzen.
+- **Peer-Namen aus der WireGuard-Config**: `fetch_wg_peers_from_config()`
+  liest `/etc/wireguard/<interface>.conf` auf dem Ziel und wertet je
+  `[Peer]`-Block dessen erste Zeile als Namens-Kommentar (`#Name`) aus;
+  `peer_lookup_maps()` baut daraus `pubkey->Name`/`ip->Name`. Wird im
+  Dashboard (Name-Spalte im WireGuard-Status) und im Netzplan verwendet.
+  Fehlt der Kommentar, fällt die UI auf IP bzw. Client-Bezeichnung zurück.
+- **Netzplan-Seite** (`/netzplan`): SVG-Graph (Knoten kreisförmig
+  angeordnet, `build_netzplan_data()`) zeigt erlaubte Verbindungen als
+  Linien; Hover zeigt die zusammengefassten erlaubten Dienste (reines
+  `<title>`-freies Tooltip per JS, kein zusätzliches JS-Framework).
+  Uneingeschränkte Clients werden nur farblich hervorgehoben (gelber
+  Rahmen), ohne Linien zu allen anderen Peers zu zeichnen. Darunter eine
+  Quick-Toggle-Matrix (`/netzplan/permissions/set`): Dropdown mit
+  eingeschränkten Clients links, Mehrfachauswahl aller bekannten Peers
+  rechts (Checkboxen, per JS aus eingebettetem JSON befüllt und je nach
+  gewähltem Client vorbelegt). Verwaltet ausschließlich Regeln mit dem
+  Dienst "Alle Ports" (`get_all_ports_service_id()`,
+  `diff_target_sets()`) - feinere, dienstspezifische Regeln bleiben davon
+  unberührt und werden weiter über die bestehende Rule-Formular im
+  Dashboard verwaltet.
 - **Unit-Tests** (`tests/`, `pytest`) für Script-Generierung
   (`build_apply_script`/`build_remove_script`), Eingabevalidierung und
   Hook-Erkennung; CI via `.github/workflows/tests.yml`.

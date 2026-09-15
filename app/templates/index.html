@@ -21,11 +21,12 @@
     {% if peers is not none %}
         <table class="status-table">
             <thead>
-                <tr><th>Public Key</th><th>Endpoint</th><th>Allowed IPs</th><th>Letzter Handshake</th><th>RX / TX</th></tr>
+                <tr><th>Name</th><th>Public Key</th><th>Endpoint</th><th>Allowed IPs</th><th>Letzter Handshake</th><th>RX / TX</th></tr>
             </thead>
             <tbody>
                 {% for p in peers %}
                 <tr>
+                    <td>{{ p.name if p.name else "-" }}</td>
                     <td class="mono small">{{ p.pubkey[:16] }}...</td>
                     <td>{{ p.endpoint }}</td>
                     <td>{{ p.allowed_ips }}</td>
@@ -35,6 +36,11 @@
                 {% endfor %}
             </tbody>
         </table>
+        <p class="muted small">
+            "Name" wird aus der WireGuard-Config des Ziels gelesen: die erste
+            Zeile direkt unter <code>[Peer]</code> als Kommentar, z.B.
+            <code>#Buero-Router</code>.
+        </p>
     {% endif %}
 </section>
 

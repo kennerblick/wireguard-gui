@@ -190,6 +190,27 @@ iptables-Grundkonfiguration.
 5. **Wartung**: Unter "Wartung" lassen sich verwaiste `WGACL_*`-Chains auf
    dem Zielserver finden und entfernen - z.B. wenn ein Client-Datensatz
    direkt in der Datenbank gelöscht wurde statt über "Entfernen" in der UI.
+6. **Netzplan**: Unter "Netzplan" zeigt ein Graph, welcher Peer wohin darf -
+   Linie zwischen zwei Peers = mindestens eine Regel erlaubt Zugriff, Maus
+   auf die Linie halten zeigt den/die erlaubten Dienst(e). Darunter lässt
+   sich voller Zugriff ("Alle Ports") von einem Peer auf beliebige andere
+   Peers per Dropdown (Quelle) + Mehrfachauswahl (Ziele, mit Checkbox)
+   umschalten - bereits erlaubte Ziele sind vorausgewählt. Einzelne,
+   dienstspezifische Regeln bleiben davon unberührt und werden weiterhin
+   über das Dashboard verwaltet.
+
+**Peer-Namen im Dashboard/Netzplan:** Die Spalte "Name" im WireGuard-Status
+sowie die Beschriftungen im Netzplan werden aus der WireGuard-Config des
+Ziels gelesen - die **erste Zeile direkt unter `[Peer]`** muss dafür ein
+Kommentar mit dem Anzeigenamen sein, z.B.:
+```
+[Peer]
+#Buero-Router
+PublicKey = ...
+AllowedIPs = 10.250.0.5/32
+```
+Ohne diesen Kommentar wird ersatzweise die IP (oder, falls der Peer als
+Client in der App angelegt ist, dessen "Bezeichnung") angezeigt.
 
 ## Allgemeine Nutzung (nicht nur isurfer.de)
 
