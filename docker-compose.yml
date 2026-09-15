@@ -1,0 +1,24 @@
+services:
+  wg-acl-manager:
+    build: .
+    container_name: wg-acl-manager
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      - ISURFER_PUBKEY=${ISURFER_PUBKEY}
+      - ISURFER_ENDPOINT=${ISURFER_ENDPOINT}
+      - CONTAINER_WG_IP=${CONTAINER_WG_IP:-10.250.0.250}
+      - ISURFER_WG_IP=${ISURFER_WG_IP:-10.250.0.1}
+      - TARGET_WG_INTERFACE=${TARGET_WG_INTERFACE:-wg0}
+      - ISURFER_SSH_USER=${ISURFER_SSH_USER:-root}
+      - FLASK_SECRET=${FLASK_SECRET:-change-me-in-production}
+    ports:
+      - "8080:8080"
+    volumes:
+      - wg-acl-data:/data
+
+volumes:
+  wg-acl-data:

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="panel">
+    <h2>WireGuard-Status ({{ wg_interface }})</h2>
+    {% if wg_error %}
+        <p class="error-text">Konnte Status nicht abrufen: {{ wg_error }}</p>
+    {% else %}
+        <p class="muted small">
+            Erkannter Einhaengepunkt fuer Regeln: <strong>{{ hook_chain }}</strong>
+            {% if hook_chain == "DOCKER-USER" %}(Docker erkannt){% else %}(Standard-FORWARD-Chain){% endif %}
+            &nbsp;|&nbsp;
+            IP-Forwarding:
+            {% if ip_forward %}
+                <span class="badge badge-ok">aktiv</span>
+            {% else %}
+                <span class="badge badge-warn">INAKTIV - Peer-zu-Peer-Traffic wird nicht geroutet!</span>
+            {% endif %}
+        </p>
+    {% endif %}
+    {% if peers is not none %}
+        <table class="status-table">
+            <thead>
+                <tr><th>Public Key</th><th>Endpoint</th><th>Allowed IPs</th><th>Letzter Handshake</th><th>RX / TX</th></tr>
+            </thead>
+            <tbody>
+                {% for p in peers %}
+                <tr>
+                    <td class="mono small">{{ p.pubkey[:16] }}...</td>
+                    <td>{{ p.endpoint }}</td>
+                    <td>{{ p.allowed_ips }}</td>
+                    <td>{{ p.latest_handshake if p.latest_handshake != "0" else "nie" }}</td>
+                    <td>{{ p.rx }} / {{ p.tx }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <h2>Zugriffs-Matrix: Wer darf wohin?</h2>
+        <form method="post" action="{{ url_for('apply_all') }}">
+            <button type="submit" class="btn btn-primary">Alle anwenden</button>
+        </form>
+    </div>
+
+    {% for client in clients %}
+    <div class="client-card {% if not client.restricted %}client-unrestricted{% endif %}">
+        <div class="client-card-header">
+            <div>
+                <strong>{{ client.label }}</strong>
+                <span class="mono">{{ client.wg_ip }}</span>
+                {% if not client.restricted %}
+                    <span class="badge badge-warn">Uneingeschraenkt (volles Mesh)</span>
+                {% else %}
+                    <span class="badge badge-ok">Eingeschraenkt</span>
+                {% endif %}
+            </div>
+            <div class="client-actions">
+                <form method="post" action="{{ url_for('toggle_client', client_id=client.id) }}">
+                    <button type="submit" class="btn btn-small">
+                        {{ "Einschraenkung deaktivieren" if client.restricted else "Einschraenkung aktivieren" }}
+                    </button>
+                </form>
+                <form method="post" action="{{ url_for('apply_single', client_id=client.id) }}">
+                    <button type="submit" class="btn btn-small btn-primary">Anwenden</button>
+                </form>
+                <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}"
+                      onsubmit="return confirm('Client {{ client.label }} wirklich entfernen? Firewall-Regeln werden zurueckgebaut.');">
+                    <button type="submit" class="btn btn-small btn-danger">Entfernen</button>
+                </form>
+            </div>
+        </div>
+
+        {% if client.restricted %}
+        <table class="rules-table">
+            <thead>
+                <tr><th>Ziel</th><th>Dienst</th><th>Protokoll / Port</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for rule in rules_by_client.get(client.id, []) %}
+                <tr>
+                    <td class="mono">{{ rule.dest_ip }}</td>
+                    <td>{{ rule.service_name }}</td>
+                    <td class="mono small">
+                        {% if rule.port %}{{ rule.protocol }}/{{ rule.port }}{% else %}alle{% endif %}
+                    </td>
+                    <td>
+                        <form method="post" action="{{ url_for('delete_rule', rule_id=rule.id) }}">
+                            <button type="submit" class="btn btn-tiny btn-danger">x</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="empty-row">Keine Regeln - Client kann aktuell nirgendwo hin (nur DROP).</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <form method="post" action="{{ url_for('add_rule') }}" class="inline-form">
+            <input type="hidden" name="client_id" value="{{ client.id }}">
+            <input type="text" name="dest_ip" placeholder="Ziel-IP (z.B. 10.250.0.12) oder 'any'" list="known-destinations" required>
+            <select name="service_id" required>
+                {% for s in services_flat %}
+                <option value="{{ s.id }}">{{ s.name }}{% if s.port %} ({{ s.protocol }}/{{ s.port }}){% endif %}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-small">+ Regel hinzufuegen</button>
+        </form>
+        {% else %}
+        <p class="muted">Dieser Client ist nicht eingeschraenkt und nutzt die normale Mesh-Regel (Zugriff auf alle Peers).</p>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="muted">Noch keine Clients erfasst.</p>
+    {% endfor %}
+
+    <datalist id="known-destinations">
+        <option value="any">
+        <option value="10.250.0.1">isurfer.de (Hub)</option>
+        <option value="10.250.0.12">srvadmin / Graylog</option>
+    </datalist>
+</section>
+
+<section class="panel">
+    <h2>Neuen Client hinzufuegen</h2>
+    <form method="post" action="{{ url_for('add_client') }}" class="inline-form">
+        <input type="text" name="wg_ip" placeholder="WG-Tunnel-IP, z.B. 10.250.0.210" required>
+        <input type="text" name="label" placeholder="Bezeichnung, z.B. Mitarbeiter Max" required>
+        <label class="checkbox-label"><input type="checkbox" name="restricted" checked> Eingeschraenkt</label>
+        <button type="submit" class="btn btn-primary">Hinzufuegen</button>
+    </form>
+    <p class="muted small">
+        Hinweis: Der Client muss bereits als WireGuard-Peer auf isurfer.de eingetragen sein
+        (siehe wireguard-Repo, <code>setup-wg-client.sh</code> bzw. <code>setup-wg-client.ps1</code>).
+        Diese App verwaltet nur die Firewall-Regeln, nicht die WireGuard-Peers selbst.
+    </p>
+</section>
+
+{% endblock %}

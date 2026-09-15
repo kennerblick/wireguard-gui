@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="panel">
+    <h2>Dienste verwalten</h2>
+    <table class="rules-table">
+        <thead>
+            <tr><th>Name</th><th>Protokoll</th><th>Port</th><th>Typ</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for s in services %}
+            <tr>
+                <td>{{ s.name }}</td>
+                <td>{{ s.protocol }}</td>
+                <td>{{ s.port if s.port else "alle" }}</td>
+                <td>{{ "Standard" if s.is_builtin else "Eigen" }}</td>
+                <td>
+                    {% if not s.is_builtin %}
+                    <form method="post" action="{{ url_for('delete_service', service_id=s.id) }}">
+                        <button type="submit" class="btn btn-tiny btn-danger">Loeschen</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="panel">
+    <h2>Neuen Dienst hinzufuegen</h2>
+    <form method="post" action="{{ url_for('add_service') }}" class="inline-form">
+        <input type="text" name="name" placeholder="Name, z.B. Grafana" required>
+        <select name="protocol" required>
+            <option value="tcp">TCP</option>
+            <option value="udp">UDP</option>
+            <option value="all">Alle (kein Port-Filter)</option>
+        </select>
+        <input type="number" name="port" placeholder="Port (leer = alle Ports)" min="1" max="65535">
+        <button type="submit" class="btn btn-primary">Hinzufuegen</button>
+    </form>
+</section>
+
+{% endblock %}
