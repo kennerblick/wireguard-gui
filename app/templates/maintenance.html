@@ -36,4 +36,47 @@
     {% endif %}
 </section>
 
+<section class="panel">
+    <h2>Firewall-Regeln (Ist-Zustand)</h2>
+    <p class="muted small">
+        Liest <code>DOCKER-USER</code> und <code>FORWARD</code> direkt vom
+        Zielserver aus (read-only, ändert nichts). IPs werden, wo bekannt,
+        mit dem Peer-Namen annotiert. Die Tabelle ist eine
+        <strong>best-effort-Interpretation</strong> einfacher
+        <code>-s</code>/<code>-d</code>/<code>-p</code>/<code>--dport</code>-Regeln
+        (auch die von dieser App selbst erzeugten <code>WGACL_*</code>-Sprungregeln) -
+        bei allem Komplexeren (Module, Negation, ...) bitte den Rohtext darunter prüfen,
+        bevor du dich darauf verlässt.
+    </p>
+    {% for section in firewall_sections %}
+    <h3 class="mono small">{{ section.chain }}</h3>
+    {% if not section.ok %}
+        <p class="error-text">Konnte nicht gelesen werden: {{ section.error }}</p>
+    {% else %}
+        {% set simple_rules = section.rules | selectattr("simple") | list %}
+        {% if simple_rules %}
+        <table class="rules-table">
+            <thead><tr><th>Quelle</th><th>Ziel</th><th>Protokoll/Port</th><th>Aktion</th></tr></thead>
+            <tbody>
+                {% for r in simple_rules %}
+                <tr>
+                    <td class="mono small">{{ r.src_label }}</td>
+                    <td class="mono small">{{ r.dst_label }}</td>
+                    <td class="mono small">{{ r.proto or "-" }}{% if r.port %}/{{ r.port }}{% endif %}</td>
+                    <td class="mono small">{{ r.target }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="muted small">Keine einfach interpretierbaren Regeln - siehe Rohtext.</p>
+        {% endif %}
+        <details>
+            <summary class="muted small">Rohtext (<code>iptables -S {{ section.chain }}</code>)</summary>
+            <pre class="firewall-raw">{{ section.raw }}</pre>
+        </details>
+    {% endif %}
+    {% endfor %}
+</section>
+
 {% endblock %}

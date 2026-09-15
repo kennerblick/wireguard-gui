@@ -152,20 +152,53 @@ zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
 - **Unit-Tests** (`tests/`, `pytest`) für Script-Generierung
   (`build_apply_script`/`build_remove_script`), Eingabevalidierung und
   Hook-Erkennung; CI via `.github/workflows/tests.yml`.
+- **Peers aus Config importieren** (`import_peers_from_config()`,
+  `/clients/import`): legt fuer WireGuard-Peers, die noch kein Client in
+  dieser App sind, einen neuen Client-Datensatz an - **eingeschraenkt, ohne
+  Regeln** (derselbe Default wie beim manuellen Hinzufuegen), macht also
+  bewusst KEINE Annahme ueber tatsaechliche Zugriffsrechte. Grund: die
+  urspruengliche Annahme "kein Eintrag = volles Mesh" gilt nicht fuer jedes
+  Setup - manche Deployments erlauben Peers standardmaessig nur den Zugriff
+  auf den Hub, nicht untereinander. Ändert nichts an der Firewall (kein
+  `apply_client()`-Aufruf beim Import).
+- **Firewall-Regeln (Ist-Zustand)** auf der Wartungsseite: liest
+  `iptables -S DOCKER-USER` und `iptables -S FORWARD` vom Ziel
+  (`parse_iptables_rules()`, `annotate_ips()`, `build_ip_label_map()`),
+  read-only. Einfache `-s`/`-d`/`-p`/`--dport`-Regeln (auch die von dieser
+  App selbst erzeugten `WGACL_*`-Sprungregeln) werden in eine lesbare
+  Tabelle uebersetzt, IPs mit dem bekannten Peer-Namen annotiert. Regeln mit
+  Negation (`!`) oder Modulen (`-m ...`) werden bewusst NICHT interpretiert
+  (nur Rohtext) - das koennte sonst falsche Zugriffs-Aussagen suggerieren.
+  Existiert, damit ein Admin den echten Ist-Zustand nachvollziehen kann,
+  bevor er ihn in dieser App nachbildet (siehe "Noch nicht umgesetzt" unten -
+  ein WG-Client-Provisioning-Assistent ist noch offen).
 
 ## Noch nicht umgesetzt / bekannte Lücken
 
 Verbleibend, in etwa nach Wichtigkeit sortiert:
 
-1. **Kein CSRF-Schutz.** Alle State-ändernden Routen sind reine POST-Forms
+1. **WG-Client-Provisioning-Assistent fehlt noch.** "Neuen Client
+   hinzufügen" legt aktuell nur einen ACL-Datensatz fuer einen bereits
+   existierenden WireGuard-Peer an - **nicht** den Peer selbst. Gewuenscht
+   (noch offen): ein Assistent, der fuer neue Windows-/Linux-/MikroTik-
+   Clients per Knopfdruck ein WG-Schluesselpaar erzeugt, dem Ziel-Server
+   einen neuen `[Peer]`-Block (inkl. `#Name`-Kommentar) hinzufuegt, die
+   Config live uebernimmt (`wg set`/`wg syncconf`, ohne Neustart) und dem
+   Admin die fertige Client-Config (bzw. ein RouterOS-Script fuer MikroTik)
+   zum Download anbietet. Sicherheitsrelevant: der generierte Private Key
+   darf nur einmalig angezeigt/heruntergeladen, NICHT in der App-DB
+   persistiert werden. Braucht ausserdem eine Quelle fuer den oeffentlichen
+   Endpoint des Ziel-Servers (Host:Port) und eine IP-Allokationsstrategie
+   fuer das Subnetz - beides noch zu klaeren. Das bestehende
+   `wireguard`-Repo hat dafuer offenbar schon Skripte
+   (`setup-wg-client.sh`/`.ps1`, siehe README) - ggf. deren Logik/Format
+   uebernehmen statt komplett neu zu entwerfen.
+2. **Kein CSRF-Schutz.** Alle State-ändernden Routen sind reine POST-Forms
    ohne Token; die Basic-Auth schützt vor fremdem Zugriff, aber nicht vor
    Cross-Site-Request-Forgery aus einem Browser, der bereits angemeldet ist.
    Bei Bedarf `flask-wtf`/eigenes Double-Submit-Token ergänzen.
-2. **`run_on_target()` hat keinen Retry/Backoff** bei transienten Netzwerkfehlern
+3. **`run_on_target()` hat keinen Retry/Backoff** bei transienten Netzwerkfehlern
    (nur die Verbindungswiederverwendung wurde ergänzt, kein Retry).
-3. **Bulk-Import fehlt.** Für Erstbefüllung bei einem bestehenden WG-Netz
-   mit vielen Peers wäre ein CSV-Import (Client-Liste) hilfreich, statt
-   jeden einzeln über das Formular anzulegen.
 4. **Login ist reine Basic-Auth ohne Rate-Limiting/Lockout** - für ein rein
    lokales/vertrauenswürdiges Netz ausreichend, für Exposition darüber
    hinaus wäre ein härterer Login-Mechanismus (z.B. hinter einem

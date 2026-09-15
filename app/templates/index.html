@@ -145,4 +145,20 @@
     </p>
 </section>
 
+<section class="panel">
+    <h2>Peers aus WireGuard-Config importieren</h2>
+    <p class="muted small">
+        Liest <code>/etc/wireguard/{{ wg_interface }}.conf</code> auf dem
+        Zielserver und legt für alle Peers, die dort schon als WireGuard-Peer
+        existieren, aber noch keinen Client-Datensatz in dieser App haben,
+        einen neuen Eintrag an (eingeschränkt, ohne Regeln - wie beim
+        manuellen Hinzufügen oben). Ändert nichts an der Firewall. Prüfe vor
+        dem "Anwenden" für einen importierten Client die tatsächlichen
+        Zugriffsrechte unter "Wartung" &rarr; "Firewall-Regeln (Ist-Zustand)".
+    </p>
+    <form method="post" action="{{ url_for('import_peers') }}">
+        <button type="submit" class="btn">Peers importieren</button>
+    </form>
+</section>
+
 {% endblock %}

@@ -428,6 +428,97 @@ def peer_lookup_maps():
     return pubkey_to_name, ip_to_name
 
 
+def import_peers_from_config(db):
+    """Legt fuer alle Peers aus der WireGuard-Config, die noch kein Client in
+    dieser App sind, einen neuen Client-Datensatz an - als "eingeschraenkt"
+    und OHNE Regeln (derselbe Default wie beim manuellen "Client hinzufuegen").
+
+    Bewusst KEINE Annahme ueber die tatsaechlichen Zugriffsrechte: was ein
+    Peer aktuell darf, haengt von der real konfigurierten Firewall ab (siehe
+    "Firewall-Regeln (Ist-Zustand)" auf der Wartungsseite) und nicht von
+    einer pauschalen Mesh-Policy. Reiner DB-Abgleich, es wird nichts auf der
+    Firewall veraendert (kein apply_client()-Aufruf) - erst ein spaeteres
+    "Anwenden" fuer diesen Client wirkt sich tatsaechlich aus, und OHNE
+    zuvor eingetragene Regeln wuerde das den Peer von allem abschneiden.
+
+    Bestehende Clients werden nicht angefasst. Gibt (importiert, uebersprungen)
+    zurueck.
+    """
+    existing_ips = {row["wg_ip"] for row in db.execute("SELECT wg_ip FROM clients").fetchall()}
+    imported = 0
+    skipped = 0
+    for peer in fetch_wg_peers_from_config():
+        first_allowed = (peer.get("allowed_ips") or "").split(",")[0].strip()
+        ip = first_allowed.split("/")[0] if first_allowed else None
+        if not ip:
+            continue
+        if ip in existing_ips:
+            skipped += 1
+            continue
+        label = peer.get("name") or ip
+        db.execute(
+            "INSERT INTO clients (wg_ip, label, restricted) VALUES (?, ?, 1)",
+            (ip, label),
+        )
+        existing_ips.add(ip)
+        imported += 1
+    db.commit()
+    return imported, skipped
+
+
+IPV4_RE = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?:/\d{1,2})?\b")
+
+
+def annotate_ips(text: str, ip_labels: dict) -> str:
+    """Haengt an bekannte IPv4-Adressen in einem Text den Peer-Namen an."""
+    def repl(m):
+        name = ip_labels.get(m.group(1))
+        return m.group(0) + (f" ({name})" if name else "")
+    return IPV4_RE.sub(repl, text)
+
+
+def parse_iptables_rules(rule_text: str):
+    """Bestes-effort-Parsing von 'iptables -S <chain>'-Zeilen.
+
+    Deckt einfache -s/-d/-p/--dport/-j-Kombinationen ab, wie sie diese App
+    selbst generiert und wie viele von Hand geschriebene Policy-Regeln
+    aussehen. Zeilen mit Negation (!) oder zusaetzlichen Modulen (-m ...)
+    werden bewusst NICHT als "einfach" interpretiert - das koennte die
+    tatsaechliche Bedeutung verfaelschen. Fuer die gibt es weiterhin den
+    Rohtext zum manuellen Nachlesen.
+    """
+    rules = []
+    for line in rule_text.splitlines():
+        line = line.strip()
+        if not line.startswith("-A"):
+            continue
+        m_src = re.search(r"(?<!\S)-s\s+(\S+)", line)
+        m_dst = re.search(r"(?<!\S)-d\s+(\S+)", line)
+        m_proto = re.search(r"(?<!\S)-p\s+(\S+)", line)
+        m_port = re.search(r"--dport\s+(\S+)", line)
+        m_target = re.search(r"(?<!\S)-j\s+(\S+)", line)
+        has_caveat = bool(re.search(r"(?<!\S)(!|-m\s)", line))
+        rules.append({
+            "raw": line,
+            "src": m_src.group(1) if m_src else None,
+            "dst": m_dst.group(1) if m_dst else None,
+            "proto": m_proto.group(1) if m_proto else None,
+            "port": m_port.group(1) if m_port else None,
+            "target": m_target.group(1) if m_target else None,
+            "simple": bool(m_target) and not has_caveat,
+        })
+    return rules
+
+
+def build_ip_label_map(db):
+    """IP -> Anzeigename, aus WireGuard-Config-Kommentaren + Client-Bezeichnungen."""
+    _, ip_to_name = peer_lookup_maps()
+    labels = dict(ip_to_name)
+    for c in db.execute("SELECT wg_ip, label FROM clients").fetchall():
+        labels.setdefault(c["wg_ip"], c["label"])
+    return labels
+
+
 # --------------------------------------------------------------------------
 # Routen
 # --------------------------------------------------------------------------
@@ -469,6 +560,23 @@ def index():
         ip_forward=ip_forward,
         wg_interface=TARGET_WG_INTERFACE,
     )
+
+
+@app.route("/clients/import", methods=["POST"])
+def import_peers():
+    db = get_db()
+    imported, skipped = import_peers_from_config(db)
+    if imported:
+        flash(
+            f"{imported} Peer(s) aus der WireGuard-Config importiert (eingeschraenkt, ohne Regeln - "
+            f"wie beim manuellen Hinzufuegen). Zugriffsrechte bitte anhand der tatsaechlichen Firewall-Regeln "
+            f"('Wartung' -> 'Firewall-Regeln') nachtragen, bevor du 'Anwenden' klickst. "
+            f"{skipped} bereits vorhanden.",
+            "success",
+        )
+    else:
+        flash(f"Keine neuen Peers gefunden ({skipped} bereits vorhanden, oder Config nicht lesbar).", "success")
+    return redirect(url_for("index"))
 
 
 @app.route("/clients/add", methods=["POST"])
@@ -663,7 +771,31 @@ def maintenance():
         orphaned = sorted(c for c in result if c not in known_chains)
     else:
         remote_error = result
-    return render_template("maintenance.html", orphaned=orphaned, remote_error=remote_error)
+
+    ip_labels = build_ip_label_map(db)
+    firewall_sections = []
+    for chain in ("DOCKER-USER", "FORWARD"):
+        f_ok, f_out = run_on_target(f"iptables -S {chain} 2>&1")
+        if not f_ok:
+            firewall_sections.append({"chain": chain, "ok": False, "error": f_out})
+            continue
+        rules = parse_iptables_rules(f_out)
+        for r in rules:
+            r["src_label"] = ip_labels.get((r["src"] or "").split("/")[0], r["src"] or "*")
+            r["dst_label"] = ip_labels.get((r["dst"] or "").split("/")[0], r["dst"] or "*")
+        firewall_sections.append({
+            "chain": chain,
+            "ok": True,
+            "rules": rules,
+            "raw": annotate_ips(f_out, ip_labels),
+        })
+
+    return render_template(
+        "maintenance.html",
+        orphaned=orphaned,
+        remote_error=remote_error,
+        firewall_sections=firewall_sections,
+    )
 
 
 @app.route("/maintenance/cleanup", methods=["POST"])

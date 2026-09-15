@@ -25,6 +25,10 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     volumes:
       - wg-acl-data:/data
+      # network_mode: host teilt nur die Netzwerk-Namespaces, NICHT das
+      # Dateisystem - ohne diesen Mount sieht der Container die Host-Config
+      # nicht und kann die Peer-Namen (Kommentare unter [Peer]) nicht lesen.
+      - /etc/wireguard:/etc/wireguard:ro
 
 volumes:
   wg-acl-data:

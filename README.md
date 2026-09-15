@@ -129,6 +129,14 @@ iptables-Regeln auf dem Host setzen. Das ist für einen alleinstehenden
 WG-Server ein akzeptabler, deutlich einfacherer Trade-off - `ADMIN_USER`/
 `ADMIN_PASSWORD` daher **unbedingt** setzen, siehe Sicherheitshinweise.
 
+**Wichtig - Dateisystem:** `network_mode: host` teilt nur die Netzwerk-
+Namespaces, **nicht** das Dateisystem. `iptables`/`wg show` funktionieren
+trotzdem (die wirken direkt auf den geteilten Netzwerk-Namespace), aber um
+die Peer-Namen aus `/etc/wireguard/<interface>.conf` zu lesen (siehe
+"Nutzung" unten), mountet `docker-compose.local.yml` `/etc/wireguard`
+read-only in den Container. Ohne diesen Mount zeigt die Namensspalte nur
+"-" an.
+
 ### 1. Repo auf dem WG-Server klonen und konfigurieren
 
 ```bash
@@ -182,8 +190,12 @@ iptables-Grundkonfiguration.
 2. **Regeln hinzufügen**: Pro Client Ziel-IP (oder `any`) + Dienst wählen.
    Wird sofort angewendet.
 3. **Einschränkung umschalten**: Ein Client kann jederzeit auf
-   "uneingeschränkt" gesetzt werden - dann greift wieder die normale
-   Mesh-Regel, die eigene Chain wird zurückgebaut.
+   "uneingeschränkt" gesetzt werden - dann baut diese App ihre eigene Chain
+   für ihn zurück, und es greift wieder das, was ohne wg-acl-manager auf dem
+   Zielserver konfiguriert ist (je nach Setup z.B. eine pauschale Mesh-Regel,
+   oder auch nur "darf zum Hub"). **Was das im Einzelfall genau bedeutet,
+   hängt von eurer tatsächlichen Firewall-Grundkonfiguration ab** - siehe
+   "Wartung" → "Firewall-Regeln (Ist-Zustand)", nicht pauschal annehmen.
 4. **Dienste verwalten**: Unter "Dienste" eigene Ports/Protokolle
    ergänzen, zusätzlich zu den mitgelieferten Standarddiensten (SSH, RDP,
    HTTPS-Alt 8443, PostgreSQL, Proxmox VE, HTTP, HTTPS, "Alle Ports").
@@ -197,7 +209,26 @@ iptables-Grundkonfiguration.
    Peers per Dropdown (Quelle) + Mehrfachauswahl (Ziele, mit Checkbox)
    umschalten - bereits erlaubte Ziele sind vorausgewählt. Einzelne,
    dienstspezifische Regeln bleiben davon unberührt und werden weiterhin
-   über das Dashboard verwaltet.
+   über das Dashboard verwaltet. Der Graph zeigt nur, was **in dieser App**
+   als Regel hinterlegt ist - nicht zwangsläufig, was auf dem Zielserver
+   tatsächlich (z.B. durch manuell gesetzte Regeln) erlaubt ist.
+7. **Peers importieren**: Button auf dem Dashboard liest die WireGuard-Config
+   des Zielservers aus und legt für alle dort vorhandenen, aber in dieser App
+   noch unbekannten Peers einen Client-Datensatz an (eingeschränkt, ohne
+   Regeln - ändert nichts an der Firewall). Nützlich, um ein bestehendes
+   WG-Netz erstzuerfassen, ohne jeden Peer einzeln eintippen zu müssen.
+   Wichtig: das behauptet **nichts** über die tatsächlichen Zugriffsrechte
+   des Peers - die anhand der echten Firewall-Regeln (siehe Punkt 8) manuell
+   nachtragen, bevor für diesen Client "Anwenden" geklickt wird (sonst würde
+   er ggf. von allem abgeschnitten, auch vom Hub).
+8. **Firewall-Regeln (Ist-Zustand)**: Unter "Wartung" zeigt ein zweiter
+   Abschnitt die tatsächlichen `DOCKER-USER`-/`FORWARD`-Regeln vom
+   Zielserver, mit Peer-Namen annotiert - read-only, ändert nichts. Eine
+   Tabelle interpretiert einfache Regeln automatisch (auch praktisch für
+   von Hand gesetzte Policy-Regeln außerhalb dieser App); alles
+   Komplexere (Module, Negation, ...) bleibt als Rohtext zum manuellen
+   Nachlesen. Damit lässt sich der reale Ist-Zustand nachvollziehen, bevor
+   man ihn in dieser App nachbildet.
 
 **Peer-Namen im Dashboard/Netzplan:** Die Spalte "Name" im WireGuard-Status
 sowie die Beschriftungen im Netzplan werden aus der WireGuard-Config des
@@ -282,6 +313,17 @@ empfehlenswert.
   `docker inspect wg-acl-manager --format '{{.HostConfig.NetworkMode}}'`
   sollte `host` ausgeben
 - Prüfen, ob `cap_add: NET_ADMIN` gesetzt ist (siehe `docker-compose.local.yml`)
+
+**Namensspalte im WireGuard-Status zeigt nur "-" (EXEC_MODE=local):**
+- Prüfen, ob der Bind-Mount aktiv ist:
+  `docker compose -f docker-compose.local.yml exec wg-acl-manager cat /etc/wireguard/wg0.conf`
+  sollte die echte Host-Config zeigen, nicht leer/Fehler sein
+- Falls das Volume erst nachträglich zu `docker-compose.local.yml` hinzugefuegt
+  wurde: Container einmal neu erstellen (Volume-Aenderungen wirken erst nach
+  einem `up -d`, nicht nach einem reinen `restart`):
+  `docker compose -f docker-compose.local.yml up -d`
+- Prüfen, ob im jeweiligen `[Peer]`-Block wirklich die **erste** Zeile ein
+  `#Name`-Kommentar ist (nicht erst nach `PublicKey`/`AllowedIPs`)
 
 **Regeln werden gespeichert, aber "Anwenden fehlgeschlagen":**
 - EXEC_MODE=ssh: Fehlermeldung aus der Flash-Message zeigt meist direkt die
