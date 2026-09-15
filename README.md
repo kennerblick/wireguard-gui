@@ -258,6 +258,26 @@ Ohne diesen Kommentar wird ersatzweise die IP (oder, falls der Peer als
 Client in der App angelegt ist, dessen "Bezeichnung") angezeigt. "Client
 bereitstellen" (Punkt 9) trägt diesen Kommentar automatisch ein.
 
+**Peers mit weiterreichendem Zugriff (AllowedIPs = ganzes Subnetz):** Normalerweise
+steht in `AllowedIPs` die eigene `/32`-Adresse des Peers, aus der die App
+seine Tunnel-IP ableitet. Bei einem Peer, der auf das gesamte Mesh
+zugreifen darf (z.B. ein Admin-Rechner), deckt `AllowedIPs` stattdessen
+das ganze Subnetz ab (z.B. `10.250.0.0/24`) - daraus lässt sich die
+eigene IP nicht mehr ableiten. Für diesen Fall zusätzlich eine zweite
+Kommentarzeile `#IP: x.x.x.x` mit der tatsächlichen eigenen Tunnel-IP
+angeben:
+```
+[Peer]
+#PC-Admin
+#IP: 10.250.0.201
+PublicKey = ...
+AllowedIPs = 10.250.0.0/24
+```
+Ohne diese Zeile würde die App fälschlich die Netzwerk-Adresse (`10.250.0.0`)
+als IP dieses Peers annehmen - sowohl beim Anzeigen als auch beim
+Importieren ("Peers importieren") und bei der freien-IP-Vorschlagsfunktion
+("Client bereitstellen").
+
 ## Allgemeine Nutzung
 
 Das Tool geht davon aus, dass der Ziel-WireGuard-Server ein Linux-Host mit

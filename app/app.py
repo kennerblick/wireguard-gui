@@ -381,9 +381,12 @@ def list_remote_wgacl_chains():
     return True, [c for c in out.split() if c]
 
 
+PEER_IP_COMMENT_RE = re.compile(r"^ip\s*:\s*(\S+)$", re.IGNORECASE)
+
+
 def fetch_wg_peers_from_config():
     """Liest die WireGuard-Config auf dem Ziel und extrahiert je Peer Name,
-    PublicKey und AllowedIPs.
+    PublicKey, AllowedIPs und ggf. eine explizite eigene IP.
 
     Namenskonvention: die erste Zeile direkt unter [Peer] ist ein Kommentar
     mit dem Anzeigenamen der Verbindung, z.B.:
@@ -393,8 +396,22 @@ def fetch_wg_peers_from_config():
         PublicKey = ...
         AllowedIPs = 10.250.0.5/32
 
-    Gibt eine Liste von dicts {"name", "pubkey", "allowed_ips"} zurueck
-    (leere Liste, falls die Config nicht lesbar ist).
+    Bei Peers mit weiterreichendem Routing-Zugriff deckt AllowedIPs kein
+    einzelnes /32 mehr ab, sondern z.B. ein ganzes Subnetz (typisch fuer
+    einen Admin-Rechner, der auf alle anderen Peers zugreifen darf) - dann
+    laesst sich die eigene Tunnel-IP nicht mehr aus AllowedIPs ableiten.
+    Fuer diesen Fall kann eine weitere Kommentarzeile im [Peer]-Block die
+    tatsaechliche eigene IP angeben:
+
+        [Peer]
+        #PC-Admin
+        #IP: 10.250.0.201
+        PublicKey = ...
+        AllowedIPs = 10.250.0.0/24
+
+    Gibt eine Liste von dicts {"name", "pubkey", "allowed_ips", "actual_ip"}
+    zurueck (leere Liste, falls die Config nicht lesbar ist). Zur
+    IP-Ermittlung siehe peer_own_ip().
     """
     ok, out = run_on_target(f"cat /etc/wireguard/{TARGET_WG_INTERFACE}.conf 2>/dev/null")
     if not ok or not out.strip():
@@ -411,7 +428,7 @@ def fetch_wg_peers_from_config():
             if current is not None:
                 peers.append(current)
             if line.lower() == "[peer]":
-                current = {"name": None, "pubkey": None, "allowed_ips": None}
+                current = {"name": None, "pubkey": None, "allowed_ips": None, "actual_ip": None}
                 first_line_of_block = True
             else:
                 current = None
@@ -419,10 +436,17 @@ def fetch_wg_peers_from_config():
             continue
         if current is None:
             continue
-        if first_line_of_block:
-            if line.startswith("#"):
-                current["name"] = line.lstrip("#").strip() or None
+        if line.startswith("#"):
+            comment = line.lstrip("#").strip()
+            if first_line_of_block:
+                current["name"] = comment or None
+            else:
+                m = PEER_IP_COMMENT_RE.match(comment)
+                if m:
+                    current["actual_ip"] = m.group(1)
             first_line_of_block = False
+            continue
+        first_line_of_block = False
         if line.lower().startswith("publickey"):
             current["pubkey"] = line.partition("=")[2].strip()
         elif line.lower().startswith("allowedips"):
@@ -430,6 +454,23 @@ def fetch_wg_peers_from_config():
     if current is not None:
         peers.append(current)
     return peers
+
+
+def peer_own_ip(peer: dict):
+    """Ermittelt die tatsaechliche eigene Tunnel-IP eines Peer-Eintrags.
+
+    Bevorzugt eine explizite "#IP: x.x.x.x"-Kommentarzeile (siehe
+    fetch_wg_peers_from_config()); ohne die wird die erste Adresse aus
+    AllowedIPs genommen - das ist bei einem gewoehnlichen Peer
+    (AllowedIPs = eigene-ip/32) korrekt, ergibt aber z.B. bei
+    AllowedIPs = 10.250.0.0/24 (weiterreichender Zugriff) nur die
+    Netzwerk-Adresse, NICHT die eigene IP - deshalb der Vorrang fuer den
+    expliziten Kommentar.
+    """
+    if peer.get("actual_ip"):
+        return peer["actual_ip"]
+    first_allowed = (peer.get("allowed_ips") or "").split(",")[0].strip()
+    return first_allowed.split("/")[0] if first_allowed else None
 
 
 def peer_lookup_maps():
@@ -446,8 +487,7 @@ def peer_lookup_maps():
             continue
         if peer.get("pubkey"):
             pubkey_to_name[peer["pubkey"]] = name
-        first_allowed = (peer.get("allowed_ips") or "").split(",")[0].strip()
-        ip = first_allowed.split("/")[0] if first_allowed else None
+        ip = peer_own_ip(peer)
         if ip:
             ip_to_name[ip] = name
     return pubkey_to_name, ip_to_name
@@ -473,8 +513,7 @@ def import_peers_from_config(db):
     imported = 0
     skipped = 0
     for peer in fetch_wg_peers_from_config():
-        first_allowed = (peer.get("allowed_ips") or "").split(",")[0].strip()
-        ip = first_allowed.split("/")[0] if first_allowed else None
+        ip = peer_own_ip(peer)
         if not ip:
             continue
         if ip in existing_ips:
@@ -596,8 +635,7 @@ def suggest_free_ip(db):
 
     used = {str(interface.ip)}
     for peer in fetch_wg_peers_from_config():
-        first = (peer.get("allowed_ips") or "").split(",")[0].strip()
-        ip = first.split("/")[0] if first else None
+        ip = peer_own_ip(peer)
         if ip:
             used.add(ip)
     for row in db.execute("SELECT wg_ip FROM clients").fetchall():

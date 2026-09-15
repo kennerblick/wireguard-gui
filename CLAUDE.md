@@ -136,6 +136,18 @@ zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
   `peer_lookup_maps()` baut daraus `pubkey->Name`/`ip->Name`. Wird im
   Dashboard (Name-Spalte im WireGuard-Status) und im Netzplan verwendet.
   Fehlt der Kommentar, fällt die UI auf IP bzw. Client-Bezeichnung zurück.
+  **`peer_own_ip(peer)`** ermittelt die eigene Tunnel-IP eines Peers: bei
+  einem gewöhnlichen Peer (`AllowedIPs = ip/32`) einfach die erste Adresse
+  aus `AllowedIPs`, bevorzugt aber eine explizite `#IP: x.x.x.x`-Kommentarzeile
+  im `[Peer]`-Block, falls vorhanden. Das ist notwendig für Peers mit
+  weiterreichendem Zugriff (`AllowedIPs` deckt ein ganzes Subnetz ab, z.B.
+  ein Admin-Rechner mit Zugriff auf alle anderen Peers) - dort wäre "erste
+  Adresse aus AllowedIPs" sonst die Netzwerk-Adresse (z.B. `10.250.0.0` bei
+  `AllowedIPs = 10.250.0.0/24`), nicht die tatsächliche eigene IP. Bug
+  gefunden beim ersten "Peers importieren" auf einer echten Config mit
+  genau so einem Peer. Alle Stellen, die frueher `allowed_ips` selbst
+  parsten (`peer_lookup_maps()`, `import_peers_from_config()`,
+  `suggest_free_ip()`), nutzen jetzt einheitlich `peer_own_ip()`.
 - **Netzplan-Seite** (`/netzplan`): SVG-Graph (Knoten kreisförmig
   angeordnet, `build_netzplan_data()`) zeigt erlaubte Verbindungen als
   Linien; Hover zeigt die zusammengefassten erlaubten Dienste (reines
