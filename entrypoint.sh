@@ -1,7 +1,24 @@
 #!/bin/bash
 set -e
 
-mkdir -p /data/wg /data/ssh /data/db
+mkdir -p /data/db
+
+EXEC_MODE="${EXEC_MODE:-ssh}"
+
+if [ "$EXEC_MODE" = "local" ]; then
+  echo "=================================================================="
+  echo "EXEC_MODE=local: wg-acl-manager verwaltet iptables direkt auf"
+  echo "diesem Host - kein eigener WireGuard-Tunnel, kein SSH-Key noetig."
+  echo "Voraussetzung: Container laeuft mit 'network_mode: host' und"
+  echo "'cap_add: NET_ADMIN' (siehe docker-compose.local.yml)."
+  echo "=================================================================="
+  cd /app
+  exec waitress-serve --host=0.0.0.0 --port=8080 app:app
+fi
+
+### Ab hier: EXEC_MODE=ssh (Standard) - eigener WG-Tunnel + SSH zum Ziel ###
+
+mkdir -p /data/wg /data/ssh
 chmod 700 /data/wg /data/ssh
 
 CONTAINER_WG_IP="${CONTAINER_WG_IP:-10.250.0.250}"

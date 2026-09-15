@@ -8,6 +8,7 @@ services:
     devices:
       - /dev/net/tun
     environment:
+      - EXEC_MODE=ssh
       - ISURFER_PUBKEY=${ISURFER_PUBKEY}
       - ISURFER_ENDPOINT=${ISURFER_ENDPOINT}
       - CONTAINER_WG_IP=${CONTAINER_WG_IP:-10.250.0.250}

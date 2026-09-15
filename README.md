@@ -1,11 +1,21 @@
 # WireGuard ACL Manager
 
-Lokaler Docker-Container mit Web-GUI zur Verwaltung, welcher WireGuard-Peer
+Docker-Container mit Web-GUI zur Verwaltung, welcher WireGuard-Peer
 im `isurfer.de`-Mesh (`10.250.0.0/24`) auf welche Ziele und Dienste
 zugreifen darf. Setzt auf die iptables-`DOCKER-USER`-Chain auf isurfer.de
 auf (siehe `wireguard`-Repo, Troubleshooting-Abschnitt zu Docker/FORWARD).
 
-## Funktionsweise
+Es gibt zwei Betriebsarten (`EXEC_MODE` in `.env`):
+
+- **`ssh`** (Standard) - der Container läuft auf einer **separaten**
+  Maschine (z.B. deinem Admin-Rechner), baut selbst einen WireGuard-Tunnel
+  zum Ziel-Server auf und verwaltet dort per SSH die iptables-Regeln. Siehe
+  Abschnitt "Einrichtung (EXEC_MODE=ssh)".
+- **`local`** - der Container läuft **direkt auf dem WireGuard-Server
+  selbst** und verwaltet iptables ohne Tunnel/SSH direkt auf dem Host.
+  Siehe Abschnitt "Betrieb direkt auf dem WG-Server (EXEC_MODE=local)".
+
+## Funktionsweise (EXEC_MODE=ssh)
 
 - Der Container baut selbst einen WireGuard-Tunnel zu isurfer.de auf (nur
   zu dessen Tunnel-IP, nicht zum ganzen `/24` - Least Privilege).
@@ -20,15 +30,24 @@ auf (siehe `wireguard`-Repo, Troubleshooting-Abschnitt zu Docker/FORWARD).
   markiert sind), bleiben von der pauschalen Regel abgedeckt - volles Mesh,
   wie bisher.
 
+Im `local`-Modus entfällt der Tunnel/SSH-Schritt komplett: derselbe
+Chain-Mechanismus (`WGACL_*`, `DROP`, Hook in `DOCKER-USER`/`FORWARD`)
+wird stattdessen direkt auf dem Host ausgeführt, auf dem der Container
+läuft.
+
 ## Voraussetzungen
 
-- Docker + Docker Compose lokal installiert.
+- Docker + Docker Compose installiert (auf dem Admin-Rechner bei
+  `EXEC_MODE=ssh`, bzw. auf dem WG-Server selbst bei `EXEC_MODE=local`).
 - Der Client, den du einschränken willst, muss bereits als regulärer
   WireGuard-Peer auf isurfer.de eingetragen sein (siehe `wireguard`-Repo).
-- `iptables-persistent` auf isurfer.de installiert (für dauerhafte Regeln
-  über Neustarts hinweg) - siehe `wireguard`-Repo, Troubleshooting.
+- `iptables-persistent` auf dem Zielserver installiert (für dauerhafte
+  Regeln über Neustarts hinweg, relevant für **nicht** von dieser App
+  verwaltete Grundregeln) - siehe `wireguard`-Repo, Troubleshooting. Für
+  die von dieser App selbst erzeugten `WGACL_*`-Regeln reicht das nicht
+  zwingend aus (siehe "Persistenz" unten).
 
-## Einrichtung
+## Einrichtung (EXEC_MODE=ssh)
 
 ### 1. Konfiguration
 
@@ -97,6 +116,64 @@ Das Dashboard sollte oben den "WireGuard-Status" von isurfer.de anzeigen
 (alle aktuellen Peers mit Handshake-Zeiten) - das bestätigt, dass Tunnel
 und SSH-Zugriff funktionieren.
 
+## Betrieb direkt auf dem WG-Server (EXEC_MODE=local)
+
+Für den Fall, dass wg-acl-manager nicht separat, sondern direkt auf dem
+WireGuard-Hub selbst laufen soll - kein eigener Tunnel, kein SSH-Key, die
+App manipuliert iptables direkt auf dem Host.
+
+**Wichtig - Trade-off:** Der Container läuft dafür mit `network_mode: host`
+und `cap_add: NET_ADMIN`, sieht also das komplette Host-Netzwerk (nicht nur
+eine einzelne Tunnel-IP wie im `ssh`-Modus) und kann theoretisch beliebige
+iptables-Regeln auf dem Host setzen. Das ist für einen alleinstehenden
+WG-Server ein akzeptabler, deutlich einfacherer Trade-off - `ADMIN_USER`/
+`ADMIN_PASSWORD` daher **unbedingt** setzen, siehe Sicherheitshinweise.
+
+### 1. Repo auf dem WG-Server klonen und konfigurieren
+
+```bash
+git clone https://github.com/kennerblick/wireguard-gui.git
+cd wireguard-gui
+cp .env.example .env
+```
+
+In `.env`:
+```
+EXEC_MODE=local
+TARGET_WG_INTERFACE=wg0      # tatsaechlicher Interface-Name auf diesem Host
+FLASK_SECRET=<openssl rand -hex 32>
+ADMIN_USER=<admin>
+ADMIN_PASSWORD=<starkes-passwort>
+```
+Die `ISURFER_*`-Variablen werden in diesem Modus nicht benötigt/ignoriert.
+
+### 2. Container bauen und starten
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+Kein Peer-Eintrag, kein SSH-Key-Deployment nötig - das entfällt komplett in
+diesem Modus.
+
+### 3. Testen
+
+Web-UI öffnen: `http://<server-ip>:8080` (Basic-Auth-Login mit den oben
+gesetzten Zugangsdaten). Das Dashboard sollte den echten `wg show`-Status
+sowie den erkannten Hook-Punkt (`DOCKER-USER`/`FORWARD`) anzeigen - beides
+wird jetzt direkt auf diesem Host abgefragt, ohne Tunnel/SSH.
+
+**Hinweis Port-Konflikt:** Wegen `network_mode: host` bindet die App direkt
+an Port 8080 auf allen Host-Interfaces - sicherstellen, dass der Port noch
+frei ist (`ss -tlnp | grep 8080`).
+
+**Hinweis Persistenz:** Im `local`-Modus baut die App beim Container-(Neu-)
+Start automatisch alle in der DB gespeicherten Client-Regeln neu auf (siehe
+"Persistenz" unten) - ein separates `iptables-persistent`/
+`netfilter-persistent` ist für die `WGACL_*`-Regeln dieser App also nicht
+zwingend nötig, wohl aber für eure sonstige, nicht von dieser App verwaltete
+iptables-Grundkonfiguration.
+
 ## Nutzung
 
 1. **Client hinzufügen**: Tunnel-IP + Bezeichnung eintragen. Neu
@@ -137,15 +214,24 @@ MikroTik-Router nutzt `WG-Logging` statt des sonst überall verwendeten
 
 **Persistenz:** Das Tool versucht `netfilter-persistent save` - ist das auf
 dem Zielserver nicht installiert, werden die Regeln trotzdem angewendet,
-aber mit einer Warnung im Log, dass sie einen Neustart nicht überleben.
+aber mit einer Warnung im Log, dass sie einen Neustart nicht überleben. Im
+`EXEC_MODE=local` baut die App ihre eigenen `WGACL_*`-Regeln bei jedem
+Container-(Neu-)Start ohnehin automatisch aus der DB neu auf (siehe oben) -
+`netfilter-persistent` ist dort für diese Regeln optional, für sonstige
+(nicht von dieser App verwaltete) iptables-Regeln auf dem Host aber weiter
+empfehlenswert.
 
 ## Sicherheitshinweise
 
-- Der SSH-Zugriff erfolgt aktuell mit dem `root`-User auf isurfer.de
-  (Standard in `.env`). Für mehr Härtung: eigenen User auf isurfer.de
-  anlegen, der per `sudoers` nur `iptables`, `netfilter-persistent` und
-  `wg show` ohne Passwort ausführen darf, und `ISURFER_SSH_USER`
+- **EXEC_MODE=ssh:** Der SSH-Zugriff erfolgt aktuell mit dem `root`-User auf
+  isurfer.de (Standard in `.env`). Für mehr Härtung: eigenen User auf
+  isurfer.de anlegen, der per `sudoers` nur `iptables`, `netfilter-persistent`
+  und `wg show` ohne Passwort ausführen darf, und `ISURFER_SSH_USER`
   entsprechend anpassen.
+- **EXEC_MODE=local:** Der Container läuft mit `network_mode: host` +
+  `cap_add: NET_ADMIN` und hat damit vollen Zugriff auf die Host-Netzwerk-
+  konfiguration (nicht nur auf seine eigenen `WGACL_*`-Chains). `ADMIN_USER`/
+  `ADMIN_PASSWORD` sind hier praktisch Pflicht, nicht nur "empfohlen".
 - `FLASK_SECRET` unbedingt individuell setzen (nicht den Default aus
   `.env.example` übernehmen).
 - Die Web-UI hat standardmäßig **keine Authentifizierung** - nur für den
@@ -162,17 +248,28 @@ aber mit einer Warnung im Log, dass sie einen Neustart nicht überleben.
 
 ## Troubleshooting
 
-**Dashboard zeigt "Konnte Status nicht abrufen":**
+**Dashboard zeigt "Konnte Status nicht abrufen" (EXEC_MODE=ssh):**
 - Prüfen, ob der WG-Tunnel steht: `docker compose exec wg-acl-manager wg show wg0`
 - Prüfen, ob der SSH-Key auf isurfer.de hinterlegt ist (Schritt 5)
 - Prüfen, ob `ISURFER_WG_IP` in `.env` mit der tatsächlichen Tunnel-IP von
   isurfer.de übereinstimmt (Standard: `10.250.0.1`)
 
+**Dashboard zeigt "Konnte Status nicht abrufen" (EXEC_MODE=local):**
+- Prüfen, ob `TARGET_WG_INTERFACE` wirklich dem echten Interface-Namen auf
+  diesem Host entspricht: `wg show` (auf dem Host, außerhalb des Containers)
+- Prüfen, ob der Container tatsächlich mit `network_mode: host` läuft:
+  `docker inspect wg-acl-manager --format '{{.HostConfig.NetworkMode}}'`
+  sollte `host` ausgeben
+- Prüfen, ob `cap_add: NET_ADMIN` gesetzt ist (siehe `docker-compose.local.yml`)
+
 **Regeln werden gespeichert, aber "Anwenden fehlgeschlagen":**
-- Fehlermeldung aus der Flash-Message zeigt meist direkt die SSH-/iptables-
-  Fehlerausgabe. Häufigste Ursache: SSH-Key noch nicht in
+- EXEC_MODE=ssh: Fehlermeldung aus der Flash-Message zeigt meist direkt die
+  SSH-/iptables-Fehlerausgabe. Häufigste Ursache: SSH-Key noch nicht in
   `authorized_keys`, oder `ISURFER_SSH_USER` hat keine Root-/sudo-Rechte
   für `iptables`.
+- EXEC_MODE=local: Fehlermeldung zeigt die iptables-Fehlerausgabe direkt.
+  Häufigste Ursache: Container läuft nicht mit `NET_ADMIN`/`network_mode:
+  host`, oder läuft nicht als root im Container.
 
 ## Entwicklung & Tests
 

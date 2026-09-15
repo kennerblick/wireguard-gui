@@ -1,0 +1,30 @@
+# Deployment-Variante fuer EXEC_MODE=local: wg-acl-manager laeuft direkt auf
+# dem WireGuard-Server selbst und verwaltet iptables ueber die Host-Netzwerk-
+# Namespaces - kein eigener WG-Tunnel, kein SSH-Key noetig.
+#
+# Start:
+#   docker compose -f docker-compose.local.yml up -d --build
+#
+# Voraussetzung: der echte WireGuard-Interface-Name des Hosts (Standard wg0)
+# in TARGET_WG_INTERFACE, ADMIN_USER/ADMIN_PASSWORD gesetzt (siehe README -
+# die Web-UI haengt hier direkt an allen Host-Interfaces, nicht nur an
+# localhost).
+services:
+  wg-acl-manager:
+    build: .
+    container_name: wg-acl-manager
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - EXEC_MODE=local
+      - TARGET_WG_INTERFACE=${TARGET_WG_INTERFACE:-wg0}
+      - FLASK_SECRET=${FLASK_SECRET:-change-me-in-production}
+      - ADMIN_USER=${ADMIN_USER:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+    volumes:
+      - wg-acl-data:/data
+
+volumes:
+  wg-acl-data:

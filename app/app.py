@@ -16,6 +16,12 @@ ISURFER_WG_IP = os.environ.get("ISURFER_WG_IP", "10.250.0.1")
 ISURFER_SSH_USER = os.environ.get("ISURFER_SSH_USER", "root")
 TARGET_WG_INTERFACE = os.environ.get("TARGET_WG_INTERFACE", "wg0")
 
+EXEC_MODE = os.environ.get("EXEC_MODE", "ssh").strip().lower()
+if EXEC_MODE not in ("ssh", "local"):
+    print(f"[app] WARNUNG: unbekannter EXEC_MODE={EXEC_MODE!r} - falle zurueck auf 'ssh'.")
+    EXEC_MODE = "ssh"
+print(f"[app] Ausfuehrungsmodus: {EXEC_MODE}")
+
 ADMIN_USER = os.environ.get("ADMIN_USER", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 if not ADMIN_USER or not ADMIN_PASSWORD:
@@ -143,12 +149,12 @@ def detect_hook_chain() -> str:
     Server ohne Docker haben diese Chain nicht; dort wird direkt oben in
     FORWARD eingehaengt.
     """
-    ok, _ = ssh_run("iptables -L DOCKER-USER -n >/dev/null 2>&1")
+    ok, _ = run_on_target("iptables -L DOCKER-USER -n >/dev/null 2>&1")
     return "DOCKER-USER" if ok else "FORWARD"
 
 
 def check_ip_forward():
-    ok, out = ssh_run("cat /proc/sys/net/ipv4/ip_forward")
+    ok, out = run_on_target("cat /proc/sys/net/ipv4/ip_forward")
     if not ok:
         return None
     return out.strip() == "1"
@@ -181,8 +187,36 @@ def validate_dest_ip(dest_ip: str):
     return dest
 
 
-def ssh_run(script: str, timeout: int = 15):
-    """Fuehrt ein Bash-Script auf dem Ziel-WG-Server per SSH aus (ueber den WG-Tunnel)."""
+def run_on_target(script: str, timeout: int = 15):
+    """Fuehrt ein Bash-Script auf dem Ziel-WG-Server aus.
+
+    EXEC_MODE=ssh (Standard): per SSH ueber einen eigenen, vom Container
+    aufgebauten WireGuard-Tunnel auf einem separaten Rechner - das
+    urspruengliche Least-Privilege-Design (Container sieht nur die
+    Tunnel-IP des Ziels, nicht das ganze Mesh).
+
+    EXEC_MODE=local: das Script laeuft direkt in diesem Container, ohne
+    SSH und ohne eigenen Tunnel - fuer den Fall, dass wg-acl-manager auf
+    dem WireGuard-Server selbst laeuft. Setzt voraus, dass der Container
+    mit network_mode: host und cap_add: NET_ADMIN gestartet wird (siehe
+    docker-compose.local.yml), damit "iptables"/"wg" hier dieselben
+    Netzwerk-Namespaces wie der Host sehen.
+    """
+    if EXEC_MODE == "local":
+        try:
+            result = subprocess.run(
+                ["bash", "-c", script],
+                capture_output=True,
+                timeout=timeout,
+            )
+            ok = result.returncode == 0
+            output = (result.stdout + result.stderr).decode(errors="replace")
+            return ok, output
+        except subprocess.TimeoutExpired:
+            return False, "Timeout beim lokalen Ausfuehren des Scripts."
+        except Exception as e:
+            return False, f"Fehler bei lokaler Ausfuehrung: {e}"
+
     try:
         result = subprocess.run(
             [
@@ -190,9 +224,9 @@ def ssh_run(script: str, timeout: int = 15):
                 "-i", SSH_KEY,
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "ConnectTimeout=8",
-                # Verbindung zwischen mehreren ssh_run()-Aufrufen (z.B. bei
-                # "Alle anwenden" fuer viele Clients) wiederverwenden statt
-                # jedes Mal neu aufzubauen.
+                # Verbindung zwischen mehreren run_on_target()-Aufrufen (z.B.
+                # bei "Alle anwenden" fuer viele Clients) wiederverwenden
+                # statt jedes Mal neu aufzubauen.
                 "-o", "ControlMaster=auto",
                 "-o", f"ControlPath={SSH_CONTROL_DIR}/cm-%r@%h:%p",
                 "-o", "ControlPersist=60s",
@@ -269,7 +303,7 @@ def log_apply(db, client_id, success, output):
 def apply_client(db, client):
     hook_chain = detect_hook_chain()
     if not client["restricted"]:
-        ok, out = ssh_run(build_remove_script(client["wg_ip"], hook_chain))
+        ok, out = run_on_target(build_remove_script(client["wg_ip"], hook_chain))
         log_apply(db, client["id"], ok, out)
         return ok, out
 
@@ -282,13 +316,13 @@ def apply_client(db, client):
         (client["id"],),
     ).fetchall()
     script = build_apply_script(client["wg_ip"], rules, hook_chain)
-    ok, out = ssh_run(script)
+    ok, out = run_on_target(script)
     log_apply(db, client["id"], ok, out)
     return ok, out
 
 
 def fetch_wg_status():
-    ok, out = ssh_run(f"wg show {TARGET_WG_INTERFACE} dump")
+    ok, out = run_on_target(f"wg show {TARGET_WG_INTERFACE} dump")
     if not ok:
         return None, out
     peers = []
@@ -312,7 +346,7 @@ def fetch_wg_status():
 
 def list_remote_wgacl_chains():
     """Listet alle WGACL_*-Chains auf dem Zielserver auf (ok, chains_oder_fehlertext)."""
-    ok, out = ssh_run(
+    ok, out = run_on_target(
         "iptables-save 2>/dev/null | grep -oE '^:WGACL_[A-Za-z0-9_]+' | sed 's/^://' | sort -u"
     )
     if not ok:
@@ -401,7 +435,7 @@ def delete_client(client_id):
     client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     if client:
         hook_chain = detect_hook_chain()
-        ssh_run(build_remove_script(client["wg_ip"], hook_chain))
+        run_on_target(build_remove_script(client["wg_ip"], hook_chain))
         db.execute("DELETE FROM clients WHERE id = ?", (client_id,))
         db.commit()
         flash(f"Client {client['label']} entfernt, Firewall-Regeln zurueckgebaut.", "success")
@@ -569,7 +603,7 @@ def cleanup_orphaned_chains():
         if chain in known_chains:
             continue
         ip_guess = chain_name_to_ip(chain)
-        rok, rout = ssh_run(build_remove_script(ip_guess, hook_chain))
+        rok, rout = run_on_target(build_remove_script(ip_guess, hook_chain))
         (removed if rok else errors).append(chain)
 
     if removed:
@@ -579,6 +613,26 @@ def cleanup_orphaned_chains():
     if not removed and not errors:
         flash("Keine verwaisten Chains gefunden.", "success")
     return redirect(url_for("maintenance"))
+
+
+def reapply_all_on_startup():
+    """Baut beim Start alle Client-Regeln aus der DB neu auf.
+
+    Nur im lokalen Modus relevant: dort faellt der Container-(Neu-)Start
+    typischerweise mit einem Host-Reboot zusammen (restart: unless-stopped),
+    und iptables-Regeln ueberleben einen Reboot nicht von selbst. Statt eine
+    zusaetzliche netfilter-persistent-Abhaengigkeit zu brauchen, baut die App
+    ihre eigenen WGACL_*-Chains einfach aus der SQLite-DB neu auf.
+    """
+    with app.app_context():
+        db = get_db()
+        clients = db.execute("SELECT * FROM clients").fetchall()
+        for client in clients:
+            apply_client(db, client)
+
+
+if EXEC_MODE == "local":
+    reapply_all_on_startup()
 
 
 if __name__ == "__main__":

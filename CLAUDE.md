@@ -2,48 +2,80 @@
 
 ## Was das ist
 
-Lokaler Docker-Container mit Web-GUI (Flask + SQLite), der verwaltet,
-welcher WireGuard-Peer auf einem Hub-and-Spoke-WireGuard-Server (z.B.
-`isurfer.de`) auf welche Ziele/Dienste zugreifen darf. Der Container baut
-selbst einen WireGuard-Tunnel zum Zielserver auf und verwaltet dort per SSH
-gezielt `iptables`-Regeln (eine eigene Chain pro eingeschränktem Client,
-Sprung dorthin aus `DOCKER-USER` bzw. `FORWARD`).
+Docker-Container mit Web-GUI (Flask + SQLite), der verwaltet, welcher
+WireGuard-Peer auf einem Hub-and-Spoke-WireGuard-Server (z.B. `isurfer.de`)
+auf welche Ziele/Dienste zugreifen darf. Erzeugt/entfernt dafür gezielt
+`iptables`-Regeln (eine eigene Chain pro eingeschränktem Client, Sprung
+dorthin aus `DOCKER-USER` bzw. `FORWARD`) - je nach `EXEC_MODE` entweder
+per SSH über einen selbst aufgebauten WG-Tunnel, oder direkt lokal.
 
 Entstanden aus einer konkreten Situation: Ein Admin hat ein Hub-and-Spoke-
 WireGuard-Netz mit ~15 Peers (Server, Router, Mitarbeiter-PCs) auf einem
 Ubuntu-Server mit Docker betrieben, brauchte aber granularere Kontrolle,
 welcher Peer wohin darf, statt der bisherigen Alles-oder-nichts-Regel.
 
+## Zwei Ausfuehrungsmodi (`EXEC_MODE`)
+
+Alle iptables-Aenderungen laufen ueber die eine Funktion
+`run_on_target(script)` in `app/app.py`, die je nach `EXEC_MODE` dispatcht:
+
+- **`ssh`** (Standard, urspruengliches Design): Container laeuft auf einer
+  **separaten** Maschine (z.B. beim Admin), baut selbst einen WireGuard-
+  Tunnel zum Zielserver auf (nur zu dessen Tunnel-IP, nicht zum ganzen
+  Subnetz - Least Privilege) und fuehrt die generierten Bash/iptables-
+  Scripts per SSH mit einem beim ersten Start generierten Ed25519-Schluessel
+  aus. Deployment: `docker-compose.yml`.
+- **`local`**: Container laeuft **direkt auf dem WireGuard-Server selbst**.
+  `run_on_target()` fuehrt das Script per `subprocess.run(["bash", "-c",
+  script])` direkt im Container aus - kein Tunnel, kein SSH-Key. Braucht
+  `network_mode: host` + `cap_add: NET_ADMIN`, damit der Container dieselben
+  Netzwerk-Namespaces wie der Host sieht (`iptables`/`wg show` wirken sonst
+  nur auf den isolierten Container-Netzwerk-Namespace). Deployment:
+  `docker-compose.local.yml`. Da Container-Neustart hier typischerweise mit
+  Host-Reboot zusammenfaellt, baut `reapply_all_on_startup()` beim Start
+  alle Client-Regeln aus der DB neu auf (Ersatz fuer eine
+  `netfilter-persistent`-Abhaengigkeit fuer die WGACL-Regeln selbst).
+
+Trade-off `local`: einfacheres Deployment (keine zweite Maschine, kein
+Tunnel/SSH-Setup), aber der Container sieht dafuer das komplette
+Host-Netzwerk statt nur einer einzelnen Tunnel-IP - Basic-Auth ist hier
+praktisch Pflicht (siehe README, Sicherheitshinweise).
+
 ## Stack
 
 - **Backend:** Python 3.12, Flask (kein ORM, rohes `sqlite3`)
 - **Frontend:** Server-seitig gerendertes Jinja2, kein JS-Framework, ein
   eigenes CSS (`app/static/style.css`), bewusst minimalistisch gehalten
-- **Deployment:** Ein einzelner Docker-Container (`docker-compose.yml`),
-  läuft lokal beim Admin, nicht auf dem verwalteten Server selbst
-- **Kommunikation zum Zielserver:** WireGuard-Tunnel (nur zur Ziel-IP, nicht
-  zum ganzen Subnetz) + SSH mit einem beim ersten Start generierten
-  Ed25519-Schlüssel
+- **Deployment:** Ein einzelner Docker-Container, zwei Compose-Varianten
+  (`docker-compose.yml` fuer `EXEC_MODE=ssh`, `docker-compose.local.yml`
+  fuer `EXEC_MODE=local`)
+- **Kommunikation zum Zielserver:** je nach Modus WireGuard-Tunnel (nur zur
+  Ziel-IP) + SSH mit generiertem Ed25519-Schluessel, oder direkte lokale
+  Ausfuehrung (siehe oben)
 
 ## Architektur in Kürze
 
 ```
-app/app.py           - komplette Anwendungslogik (Routen, DB, SSH-Aufrufe,
-                       iptables-Script-Generierung, Basic-Auth, Validierung)
-app/templates/       - Jinja2-Templates (base, index=Dashboard, services,
-                       maintenance=verwaiste Chains)
-app/static/style.css - Styling
-tests/               - pytest-Suite fuer Script-Generierung, Validierung,
-                       Hook-Erkennung (kein echter SSH-/WG-Zugriff noetig)
-.github/workflows/   - CI (pytest bei jedem Push)
-entrypoint.sh         - Container-Start: WG-Keypair + SSH-Keypair erzeugen
-                       (persistiert unter /data), wg0 hochfahren,
-                       App per waitress starten
-Dockerfile           - Basis-Image + Systempakete (wireguard-tools,
-                       openssh-client) + Python-Deps
-docker-compose.yml   - lokale Deployment-Definition
-requirements-dev.txt - zusaetzliche Dev-/Test-Abhaengigkeiten (pytest)
-.env.example         - Konfigurationsvorlage
+app/app.py              - komplette Anwendungslogik (Routen, DB,
+                          run_on_target()=SSH- oder lokale Ausfuehrung,
+                          iptables-Script-Generierung, Basic-Auth, Validierung)
+app/templates/          - Jinja2-Templates (base, index=Dashboard, services,
+                          maintenance=verwaiste Chains)
+app/static/style.css    - Styling
+tests/                  - pytest-Suite fuer Script-Generierung, Validierung,
+                          Hook-Erkennung (kein echter SSH-/WG-Zugriff noetig)
+.github/workflows/      - CI (pytest bei jedem Push)
+entrypoint.sh            - Container-Start: bei EXEC_MODE=ssh WG-Keypair +
+                          SSH-Keypair erzeugen (persistiert unter /data),
+                          wg0 hochfahren; bei EXEC_MODE=local direkt
+                          waitress starten. Immer: App per waitress starten
+Dockerfile              - Basis-Image + Systempakete (wireguard-tools,
+                          openssh-client, iptables) + Python-Deps
+docker-compose.yml      - Deployment-Definition fuer EXEC_MODE=ssh
+docker-compose.local.yml - Deployment-Definition fuer EXEC_MODE=local
+                          (network_mode: host, kein WG-Tunnel/SSH-Key)
+requirements-dev.txt    - zusaetzliche Dev-/Test-Abhaengigkeiten (pytest)
+.env.example            - Konfigurationsvorlage (beide Modi)
 ```
 
 **Datenmodell** (SQLite, `/data/db/wgacl.db`):
@@ -81,8 +113,15 @@ zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
   gegen eine Zeichen-Whitelist, bevor die Werte in das per SSH ausgeführte
   iptables-Script einfließen.
 - **SSH-Verbindungswiederverwendung** über `ControlMaster`/`ControlPersist`
-  in `ssh_run()` - `apply_all` mit vielen Clients baut nicht mehr pro Aktion
-  eine neue SSH-Verbindung auf.
+  in `run_on_target()` (EXEC_MODE=ssh) - `apply_all` mit vielen Clients baut
+  nicht mehr pro Aktion eine neue SSH-Verbindung auf.
+- **Lokaler Ausfuehrungsmodus** (`EXEC_MODE=local`): `run_on_target()` kann
+  das generierte Script statt per SSH auch direkt im Container ausfuehren,
+  fuer den Fall, dass wg-acl-manager auf dem WG-Server selbst laeuft (kein
+  eigener Tunnel, kein SSH-Key noetig). Braucht `network_mode: host` +
+  `cap_add: NET_ADMIN` (`docker-compose.local.yml`). Baut beim Start ueber
+  `reapply_all_on_startup()` alle Client-Regeln aus der DB neu auf, da ein
+  Container-Neustart hier meist mit einem Host-Reboot zusammenfaellt.
 - **Aufräumen verwaister Chains**: neue Seite "Wartung" listet `WGACL_*`-
   Chains auf dem Zielserver ohne zugehörigen DB-Client auf und kann sie
   gezielt entfernen (`list_remote_wgacl_chains()`,
@@ -101,7 +140,7 @@ Verbleibend, in etwa nach Wichtigkeit sortiert:
    ohne Token; die Basic-Auth schützt vor fremdem Zugriff, aber nicht vor
    Cross-Site-Request-Forgery aus einem Browser, der bereits angemeldet ist.
    Bei Bedarf `flask-wtf`/eigenes Double-Submit-Token ergänzen.
-2. **`ssh_run()` hat keinen Retry/Backoff** bei transienten Netzwerkfehlern
+2. **`run_on_target()` hat keinen Retry/Backoff** bei transienten Netzwerkfehlern
    (nur die Verbindungswiederverwendung wurde ergänzt, kein Retry).
 3. **Bulk-Import fehlt.** Für Erstbefüllung bei einem bestehenden WG-Netz
    mit vielen Peers wäre ein CSV-Import (Client-Liste) hilfreich, statt
@@ -114,7 +153,7 @@ Verbleibend, in etwa nach Wichtigkeit sortiert:
 ## Lokales Testen ohne echten WG-Server
 
 Für schnelle UI-Iteration lässt sich die App auch direkt mit Python starten
-(ohne Docker, ohne echten WireGuard-Tunnel) - `ssh_run()` schlägt dann
+(ohne Docker, ohne echten WireGuard-Tunnel) - `run_on_target()` schlägt dann
 einfach fehl (Timeout/Connection refused), das Dashboard zeigt einen
 Fehlerzustand, aber CRUD auf Clients/Services/Regeln funktioniert trotzdem,
 da diese nur in SQLite landen:

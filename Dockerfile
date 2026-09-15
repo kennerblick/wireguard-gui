@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wireguard-tools \
     openssh-client \
     iproute2 \
+    iptables \
     procps \
     sqlite3 \
     && rm -rf /var/lib/apt/lists/*
