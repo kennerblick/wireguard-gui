@@ -20,6 +20,10 @@ services:
     environment:
       - EXEC_MODE=local
       - TARGET_WG_INTERFACE=${TARGET_WG_INTERFACE:-wg0}
+      # Oeffentlicher Endpoint (Host:Port) dieses Servers - wird fuer die
+      # Client-Provisionierung ("Client bereitstellen") in generierte
+      # Client-Configs eingesetzt.
+      - WG_SERVER_ENDPOINT=${WG_SERVER_ENDPOINT:-${ISURFER_ENDPOINT:-}}
       - FLASK_SECRET=${FLASK_SECRET:-change-me-in-production}
       - ADMIN_USER=${ADMIN_USER:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}

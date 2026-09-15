@@ -1,3 +1,4 @@
+import base64
 import hmac
 import ipaddress
 import json
@@ -14,8 +15,28 @@ DB_PATH = "/data/db/wgacl.db"
 SSH_KEY = "/data/ssh/id_ed25519"
 SSH_CONTROL_DIR = os.path.dirname(SSH_KEY)
 
-ISURFER_WG_IP = os.environ.get("ISURFER_WG_IP", "10.250.0.1")
-ISURFER_SSH_USER = os.environ.get("ISURFER_SSH_USER", "root")
+
+def _env_with_legacy_fallback(new_name: str, old_name: str, default: str = "") -> str:
+    """Liest new_name, faellt sonst auf old_name zurueck (mit Hinweis).
+
+    Die ISURFER_*-Variablen aus frueheren Versionen (benannt nach einem
+    konkreten Server) wurden zu generischen WG_SERVER_*-Namen umbenannt.
+    Bestehende .env-Dateien mit den alten Namen funktionieren dank dieses
+    Fallbacks unveraendert weiter.
+    """
+    val = os.environ.get(new_name)
+    if val is not None:
+        return val
+    val = os.environ.get(old_name)
+    if val is not None:
+        print(f"[app] HINWEIS: {old_name} ist veraltet, bitte in der .env auf {new_name} umbenennen.")
+        return val
+    return default
+
+
+WG_SERVER_TUNNEL_IP = _env_with_legacy_fallback("WG_SERVER_TUNNEL_IP", "ISURFER_WG_IP", "10.250.0.1")
+WG_SERVER_SSH_USER = _env_with_legacy_fallback("WG_SERVER_SSH_USER", "ISURFER_SSH_USER", "root")
+WG_SERVER_ENDPOINT = _env_with_legacy_fallback("WG_SERVER_ENDPOINT", "ISURFER_ENDPOINT", "")
 TARGET_WG_INTERFACE = os.environ.get("TARGET_WG_INTERFACE", "wg0")
 
 EXEC_MODE = os.environ.get("EXEC_MODE", "ssh").strip().lower()
@@ -37,6 +58,10 @@ app.secret_key = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
 
 VALID_PROTOCOLS = {"tcp", "udp", "all"}
 SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9 _.\-()]{1,64}$")
+LABEL_RE = re.compile(r"^[A-Za-z0-9 _.\-()]{1,64}$")
+
+SYSLOG_PORT_LINUX = os.environ.get("PROVISION_SYSLOG_PORT_LINUX", "5141")
+SYSLOG_PORT_MIKROTIK = os.environ.get("PROVISION_SYSLOG_PORT_MIKROTIK", "5140")
 
 BUILTIN_SERVICES = [
     # name, protocol, port  (port=None -> alle Ports)
@@ -145,11 +170,11 @@ def init_db():
 def detect_hook_chain() -> str:
     """Ermittelt, wohin die Client-Chains eingehaengt werden sollen.
 
-    Server mit Docker (wie isurfer.de) haben eine DOCKER-USER-Chain, die vor
-    Docker's eigener FORWARD-Logik ausgewertet wird - dort ist der richtige
-    Ort fuer eigene Regeln, weil Docker die FORWARD-Policy sonst ueberschreibt.
-    Server ohne Docker haben diese Chain nicht; dort wird direkt oben in
-    FORWARD eingehaengt.
+    Server mit Docker (z.B. weil dort auch andere Container laufen) haben
+    eine DOCKER-USER-Chain, die vor Docker's eigener FORWARD-Logik
+    ausgewertet wird - dort ist der richtige Ort fuer eigene Regeln, weil
+    Docker die FORWARD-Policy sonst ueberschreibt. Server ohne Docker haben
+    diese Chain nicht; dort wird direkt oben in FORWARD eingehaengt.
     """
     ok, _ = run_on_target("iptables -L DOCKER-USER -n >/dev/null 2>&1")
     return "DOCKER-USER" if ok else "FORWARD"
@@ -232,7 +257,7 @@ def run_on_target(script: str, timeout: int = 15):
                 "-o", "ControlMaster=auto",
                 "-o", f"ControlPath={SSH_CONTROL_DIR}/cm-%r@%h:%p",
                 "-o", "ControlPersist=60s",
-                f"{ISURFER_SSH_USER}@{ISURFER_WG_IP}",
+                f"{WG_SERVER_SSH_USER}@{WG_SERVER_TUNNEL_IP}",
                 "bash", "-s",
             ],
             input=script.encode(),
@@ -520,6 +545,344 @@ def build_ip_label_map(db):
 
 
 # --------------------------------------------------------------------------
+# Client-Bereitstellung ("Client bereitstellen")
+#
+# Der private Schluessel eines neuen Peers wird IMMER lokal auf dessen
+# eigenem Geraet erzeugt und verlaesst es nie (Schritt 1). Diese App sieht
+# nur den resultierenden Public Key (Schritt 2) und registriert damit den
+# Peer auf dem Ziel-Server - live per "wg set" und dauerhaft per Eintrag in
+# der Server-Config.
+# --------------------------------------------------------------------------
+
+def fetch_wg_interface_info():
+    """Liest [Interface]-Werte (Address, ListenPort) aus der Config des Ziels."""
+    ok, out = run_on_target(f"cat /etc/wireguard/{TARGET_WG_INTERFACE}.conf 2>/dev/null")
+    if not ok or not out.strip():
+        return {}
+    info = {}
+    in_interface = False
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            in_interface = line.lower() == "[interface]"
+            continue
+        if not in_interface:
+            continue
+        if line.lower().startswith("address"):
+            info["address"] = line.partition("=")[2].strip()
+        elif line.lower().startswith("listenport"):
+            info["listen_port"] = line.partition("=")[2].strip()
+    return info
+
+
+def suggest_free_ip(db):
+    """Schlaegt die naechste freie IP im konfigurierten Subnetz vor.
+
+    Liest das Subnetz aus der [Interface]-Address-Zeile der Ziel-Config und
+    schliesst bereits vergebene IPs aus (WireGuard-Peers laut Config,
+    Clients laut DB, sowie die Adresse des Interfaces selbst). Gibt
+    (ip_oder_None, fehlertext_oder_None) zurueck.
+    """
+    info = fetch_wg_interface_info()
+    address = info.get("address")
+    if not address:
+        return None, "Konnte Subnetz nicht ermitteln (Address in [Interface] fehlt/nicht lesbar)."
+    try:
+        interface = ipaddress.ip_interface(address)
+    except ValueError:
+        return None, f"Ungueltige Address-Zeile in der Config: {address!r}"
+
+    used = {str(interface.ip)}
+    for peer in fetch_wg_peers_from_config():
+        first = (peer.get("allowed_ips") or "").split(",")[0].strip()
+        ip = first.split("/")[0] if first else None
+        if ip:
+            used.add(ip)
+    for row in db.execute("SELECT wg_ip FROM clients").fetchall():
+        used.add(row["wg_ip"])
+
+    for candidate in interface.network.hosts():
+        if str(candidate) not in used:
+            return str(candidate), None
+    return None, "Keine freie IP im Subnetz gefunden."
+
+
+def validate_wg_pubkey(pubkey: str):
+    """Prueft, ob ein String ein plausibler WireGuard-Public-Key ist
+    (Base64-kodierter 32-Byte-Wert). Gibt den getrimmten Key oder None zurueck."""
+    pubkey = pubkey.strip()
+    try:
+        raw = base64.b64decode(pubkey, validate=True)
+    except Exception:
+        return None
+    return pubkey if len(raw) == 32 else None
+
+
+LINUX_SCRIPT_TEMPLATE = """#!/bin/bash
+set -e
+
+### Automatisch erzeugt von wg-acl-manager - Client: @@LABEL@@ (@@IP@@) ###
+
+echo "=== Tunnel-IP fuer diesen Server: @@IP@@/24 (Label: @@LABEL@@) ==="
+
+### 1) WireGuard-Tools installieren, falls nicht vorhanden ###
+if ! command -v wg >/dev/null 2>&1; then
+  echo "Installiere wireguard-tools..."
+  if command -v apt >/dev/null 2>&1; then
+    apt update && apt install -y wireguard-tools
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y wireguard-tools
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y wireguard-tools
+  else
+    echo "FEHLER: Kein unterstuetzter Paketmanager gefunden - wireguard-tools manuell installieren."
+    exit 1
+  fi
+else
+  echo "wireguard-tools bereits installiert."
+fi
+
+### 2) Schluesselpaar erzeugen (nur wenn noch nicht vorhanden) ###
+mkdir -p /etc/wireguard
+chmod 700 /etc/wireguard
+
+if [ -f /etc/wireguard/privatekey ]; then
+  echo "Vorhandenes Schluesselpaar gefunden, wird wiederverwendet."
+else
+  umask 077
+  wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+  echo "Neues Schluesselpaar erzeugt."
+fi
+
+PRIVATE_KEY=$(cat /etc/wireguard/privatekey)
+PUBLIC_KEY=$(cat /etc/wireguard/publickey)
+
+### 3) wg0.conf erzeugen ###
+if [ -f /etc/wireguard/wg0.conf ]; then
+  echo "WARNUNG: /etc/wireguard/wg0.conf existiert bereits - wird NICHT ueberschrieben."
+  echo "Bitte manuell pruefen/anpassen. Abbruch."
+  exit 1
+fi
+
+cat > /etc/wireguard/wg0.conf <<EOF
+[Interface]
+PrivateKey = ${PRIVATE_KEY}
+Address = @@IP@@/24
+ListenPort = 51820
+
+[Peer]
+PublicKey = @@HUB_PUBKEY@@
+Endpoint = @@HUB_ENDPOINT@@
+AllowedIPs = @@NETWORK_CIDR@@
+PersistentKeepalive = 25
+EOF
+
+chmod 600 /etc/wireguard/wg0.conf
+
+### 4) Interface aktivieren und beim Boot starten ###
+systemctl enable wg-quick@wg0 >/dev/null 2>&1 || true
+wg-quick up wg0
+@@SYSLOG_BLOCK@@
+echo ""
+echo "================================================================"
+echo "Fertig auf diesem Client. Aktueller Status:"
+wg show wg0
+echo "================================================================"
+echo ""
+echo ">>> Diesen Public Key in wg-acl-manager unter 'Client bereitstellen' -> Schritt 2 eintragen: <<<"
+echo ""
+echo "${PUBLIC_KEY}"
+echo "================================================================"
+"""
+
+LINUX_SYSLOG_BLOCK = """
+### 5) rsyslog-Forwarding einrichten ###
+if [ ! -d /etc/rsyslog.d ]; then
+  echo "WARNUNG: /etc/rsyslog.d nicht gefunden - ist rsyslog installiert? Ueberspringe Log-Forwarding."
+else
+  cat > /etc/rsyslog.d/60-forward-to-fluentbit.conf <<RSYSLOG_EOF
+*.warning    @@@SYSLOG_HOST@@:@@SYSLOG_PORT@@
+RSYSLOG_EOF
+  systemctl restart rsyslog
+  echo "rsyslog-Forwarding eingerichtet: *.warning -> @@SYSLOG_HOST@@:@@SYSLOG_PORT@@"
+  logger -p user.warning "Testnachricht von @@LABEL@@ (@@IP@@) ueber WireGuard"
+fi
+"""
+
+WINDOWS_SCRIPT_TEMPLATE = """# setup-wg-client.ps1
+# Automatisch erzeugt von wg-acl-manager - Client: @@LABEL@@ (@@IP@@)
+# Nutzung (PowerShell als Administrator): .\\setup-wg-client.ps1
+
+$WgExe = "C:\\Program Files\\WireGuard\\wg.exe"
+$WireGuardExe = "C:\\Program Files\\WireGuard\\wireguard.exe"
+$ConfigDir = "C:\\WireGuard-Configs"
+$TunnelIP = "@@IP@@"
+$Label = "@@LABEL@@"
+$HubPubKey = "@@HUB_PUBKEY@@"
+$HubEndpoint = "@@HUB_ENDPOINT@@"
+$NetworkCidr = "@@NETWORK_CIDR@@"
+$ConfigFile = "$ConfigDir\\$Label.conf"
+
+if (-not (Test-Path $WgExe)) {
+    Write-Error "wg.exe nicht gefunden unter $WgExe - ist WireGuard for Windows installiert?"
+    exit 1
+}
+
+New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+
+if (Test-Path $ConfigFile) {
+    Write-Warning "Config $ConfigFile existiert bereits - wird nicht ueberschrieben. Abbruch."
+    exit 1
+}
+
+Write-Host "=== Erzeuge Schluesselpaar ==="
+$PrivateKey = & $WgExe genkey
+$PublicKey = $PrivateKey | & $WgExe pubkey
+
+$ConfigContent = @"
+[Interface]
+PrivateKey = $PrivateKey
+Address = $TunnelIP/32
+
+[Peer]
+PublicKey = $HubPubKey
+Endpoint = $HubEndpoint
+AllowedIPs = $NetworkCidr
+PersistentKeepalive = 25
+"@
+
+Set-Content -Path $ConfigFile -Value $ConfigContent -Encoding ASCII
+
+Write-Host "=== Tunnel-Config erstellt: $ConfigFile ==="
+Write-Host "=== Installiere als Windows-Dienst (autostart, laeuft auch ohne Login) ==="
+& $WireGuardExe /installtunnelservice $ConfigFile
+
+Write-Host ""
+Write-Host "================================================================"
+Write-Host "Fertig. Tunnel-IP: $TunnelIP (Label: $Label)"
+Write-Host "================================================================"
+Write-Host ""
+Write-Host ">>> Diesen Public Key in wg-acl-manager unter 'Client bereitstellen' -> Schritt 2 eintragen: <<<"
+Write-Host ""
+Write-Host "$PublicKey"
+Write-Host "================================================================"
+"""
+
+MIKROTIK_SCRIPT_TEMPLATE = """# MikroTik WireGuard Setup
+# Automatisch erzeugt von wg-acl-manager - Client: @@LABEL@@ (@@IP@@)
+# Im RouterOS-Terminal (Winbox oder SSH) als Ganzes einfuegen.
+
+/interface/wireguard/add name=wg-client listen-port=51820
+/ip/address/add address=@@IP@@/24 interface=wg-client
+/interface/wireguard/peers/add interface=wg-client public-key="@@HUB_PUBKEY@@" endpoint-address=@@HUB_ENDPOINT_HOST@@ endpoint-port=@@HUB_ENDPOINT_PORT@@ allowed-address=@@NETWORK_CIDR@@ persistent-keepalive=25s
+
+# Firewall: WireGuard-Handshake von aussen erlauben
+/ip/firewall/filter/add chain=input protocol=udp dst-port=51820 action=accept place-before=0 comment="WireGuard @@LABEL@@"
+
+# Firewall: SSH-Management ueber den Tunnel erlauben (fuer zentrale Automatisierung)
+/ip/firewall/filter/add chain=input in-interface=wg-client protocol=tcp dst-port=22 action=accept place-before=0 comment="SSH via WireGuard @@LABEL@@"
+@@SYSLOG_BLOCK@@
+:put "=== PUBLIC KEY dieses Routers (in wg-acl-manager unter 'Client bereitstellen' -> Schritt 2 eintragen): ==="
+/interface/wireguard/print
+"""
+
+MIKROTIK_SYSLOG_BLOCK = """
+# Syslog-Forwarding ab warning/error/critical
+/system/logging/action/add name=wgaclsyslog target=remote remote=@@SYSLOG_HOST@@ remote-port=@@SYSLOG_PORT@@ src-address=@@IP@@
+/system/logging/add topics=warning action=wgaclsyslog
+/system/logging/add topics=error action=wgaclsyslog
+/system/logging/add topics=critical action=wgaclsyslog
+"""
+
+
+def _fill_template(template: str, **values) -> str:
+    for key, val in values.items():
+        template = template.replace(f"@@{key}@@", val)
+    return template
+
+
+def render_linux_script(label, ip, hub_pubkey, hub_endpoint, network_cidr, syslog_host):
+    syslog_block = ""
+    if syslog_host:
+        syslog_block = _fill_template(
+            LINUX_SYSLOG_BLOCK,
+            SYSLOG_HOST=syslog_host,
+            SYSLOG_PORT=SYSLOG_PORT_LINUX,
+            LABEL=label,
+            IP=ip,
+        )
+    return _fill_template(
+        LINUX_SCRIPT_TEMPLATE,
+        LABEL=label,
+        IP=ip,
+        HUB_PUBKEY=hub_pubkey,
+        HUB_ENDPOINT=hub_endpoint,
+        NETWORK_CIDR=network_cidr,
+        SYSLOG_BLOCK=syslog_block,
+    )
+
+
+def render_windows_script(label, ip, hub_pubkey, hub_endpoint, network_cidr):
+    return _fill_template(
+        WINDOWS_SCRIPT_TEMPLATE,
+        LABEL=label,
+        IP=ip,
+        HUB_PUBKEY=hub_pubkey,
+        HUB_ENDPOINT=hub_endpoint,
+        NETWORK_CIDR=network_cidr,
+    )
+
+
+def render_mikrotik_script(label, ip, hub_pubkey, hub_endpoint, network_cidr, syslog_host):
+    endpoint_host, _, endpoint_port = hub_endpoint.rpartition(":")
+    syslog_block = ""
+    if syslog_host:
+        syslog_block = _fill_template(
+            MIKROTIK_SYSLOG_BLOCK,
+            SYSLOG_HOST=syslog_host,
+            SYSLOG_PORT=SYSLOG_PORT_MIKROTIK,
+            IP=ip,
+        )
+    return _fill_template(
+        MIKROTIK_SCRIPT_TEMPLATE,
+        LABEL=label,
+        IP=ip,
+        HUB_PUBKEY=hub_pubkey,
+        HUB_ENDPOINT_HOST=endpoint_host or hub_endpoint,
+        HUB_ENDPOINT_PORT=endpoint_port or "51820",
+        NETWORK_CIDR=network_cidr,
+        SYSLOG_BLOCK=syslog_block,
+    )
+
+
+def register_peer_on_target(pubkey: str, ip: str, label: str):
+    """Registriert einen neuen Peer live UND persistent auf dem Ziel-Server.
+
+    Fuegt den Peer per "wg set" sofort hinzu (wirkt ohne Neustart) und haengt
+    - falls noch nicht vorhanden - einen [Peer]-Block mit #Name-Kommentar an
+    die Config-Datei an, damit er auch einen Neustart/wg-quick-Neuaufbau
+    uebersteht. pubkey/ip/label muessen vom Aufrufer bereits validiert sein
+    (validate_wg_pubkey/ipaddress/LABEL_RE) - sie fliessen direkt in ein per
+    SSH oder lokal ausgefuehrtes Bash-Script ein.
+    """
+    iface = TARGET_WG_INTERFACE
+    script = (
+        "set -e\n"
+        f"wg set {iface} peer {pubkey} allowed-ips {ip}/32\n"
+        f'CONF=/etc/wireguard/{iface}.conf\n'
+        f'if ! grep -qF "{pubkey}" "$CONF" 2>/dev/null; then\n'
+        f'  printf "\\n[Peer]\\n#{label}\\nPublicKey = {pubkey}\\nAllowedIPs = {ip}/32\\n" >> "$CONF"\n'
+        f'  echo "Peer dauerhaft in $CONF eingetragen."\n'
+        f"else\n"
+        f'  echo "Peer war bereits in $CONF eingetragen - nicht dupliziert."\n'
+        f"fi\n"
+    )
+    return run_on_target(script)
+
+
+# --------------------------------------------------------------------------
 # Routen
 # --------------------------------------------------------------------------
 
@@ -549,6 +912,9 @@ def index():
         for p in peers:
             p["name"] = pubkey_to_name.get(p["pubkey"], "")
 
+    ip_labels = build_ip_label_map(db)
+    known_destinations = sorted(ip_labels.items(), key=lambda kv: kv[1])
+
     return render_template(
         "index.html",
         clients=clients,
@@ -559,6 +925,7 @@ def index():
         hook_chain=hook_chain,
         ip_forward=ip_forward,
         wg_interface=TARGET_WG_INTERFACE,
+        known_destinations=known_destinations,
     )
 
 
@@ -577,6 +944,126 @@ def import_peers():
     else:
         flash(f"Keine neuen Peers gefunden ({skipped} bereits vorhanden, oder Config nicht lesbar).", "success")
     return redirect(url_for("index"))
+
+
+@app.route("/provision")
+def provision():
+    db = get_db()
+    suggested_ip, ip_error = suggest_free_ip(db)
+    return render_template("provision.html", suggested_ip=suggested_ip, ip_error=ip_error)
+
+
+@app.route("/provision/script")
+def provision_script():
+    platform = request.args.get("platform", "linux").strip().lower()
+    label = request.args.get("label", "").strip()
+    ip_raw = request.args.get("ip", "").strip()
+
+    if not LABEL_RE.match(label):
+        flash("Ungueltiger Name (erlaubt: Buchstaben, Zahlen, Leerzeichen, . _ - ( )).", "error")
+        return redirect(url_for("provision"))
+    try:
+        ip_obj = ipaddress.ip_address(ip_raw)
+    except ValueError:
+        flash(f"Ungueltige IP: {ip_raw!r}", "error")
+        return redirect(url_for("provision"))
+
+    info = fetch_wg_interface_info()
+    address = info.get("address")
+    if not address:
+        flash("Konnte Subnetz/Interface-Config des Ziels nicht lesen.", "error")
+        return redirect(url_for("provision"))
+    try:
+        network = ipaddress.ip_interface(address).network
+    except ValueError:
+        flash(f"Ungueltige Address-Zeile in der Ziel-Config: {address!r}", "error")
+        return redirect(url_for("provision"))
+
+    ok, hub_pubkey = run_on_target(f"wg show {TARGET_WG_INTERFACE} public-key")
+    if not ok or not hub_pubkey.strip():
+        flash(f"Konnte Public Key des Ziel-Servers nicht ermitteln: {hub_pubkey}", "error")
+        return redirect(url_for("provision"))
+    hub_pubkey = hub_pubkey.strip()
+
+    hub_endpoint = WG_SERVER_ENDPOINT
+    if ":" not in hub_endpoint:
+        flash(
+            "WG_SERVER_ENDPOINT ist nicht (korrekt, Format host:port) gesetzt - "
+            "wird fuer die Client-Config benoetigt.",
+            "error",
+        )
+        return redirect(url_for("provision"))
+
+    syslog_host = str(ipaddress.ip_interface(address).ip)
+    ip_str = str(ip_obj)
+    network_cidr = str(network)
+
+    if platform == "linux":
+        content = render_linux_script(label, ip_str, hub_pubkey, hub_endpoint, network_cidr, syslog_host)
+        filename = f"setup-wg-client-{label}.sh"
+        mimetype = "text/x-shellscript"
+    elif platform == "windows":
+        content = render_windows_script(label, ip_str, hub_pubkey, hub_endpoint, network_cidr)
+        filename = f"setup-wg-client-{label}.ps1"
+        mimetype = "text/plain"
+    elif platform == "mikrotik":
+        content = render_mikrotik_script(label, ip_str, hub_pubkey, hub_endpoint, network_cidr, syslog_host)
+        filename = f"mikrotik-setup-{label}.rsc"
+        mimetype = "text/plain"
+    else:
+        flash(f"Unbekannte Plattform: {platform!r}", "error")
+        return redirect(url_for("provision"))
+
+    return Response(
+        content,
+        mimetype=mimetype,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.route("/provision/register", methods=["POST"])
+def provision_register():
+    db = get_db()
+    label = request.form.get("label", "").strip()
+    ip_raw = request.form.get("ip", "").strip()
+    pubkey_raw = request.form.get("pubkey", "").strip()
+
+    if not LABEL_RE.match(label):
+        flash("Ungueltiger Name (erlaubt: Buchstaben, Zahlen, Leerzeichen, . _ - ( )).", "error")
+        return redirect(url_for("provision"))
+    try:
+        ip_obj = ipaddress.ip_address(ip_raw)
+    except ValueError:
+        flash(f"Ungueltige IP: {ip_raw!r}", "error")
+        return redirect(url_for("provision"))
+    pubkey = validate_wg_pubkey(pubkey_raw)
+    if pubkey is None:
+        flash("Ungueltiger Public Key (muss ein Base64-kodierter 32-Byte-Wert sein).", "error")
+        return redirect(url_for("provision"))
+
+    ok, out = register_peer_on_target(pubkey, str(ip_obj), label)
+    if not ok:
+        flash(f"Peer-Registrierung auf dem Server fehlgeschlagen: {out}", "error")
+        return redirect(url_for("provision"))
+
+    try:
+        db.execute(
+            "INSERT INTO clients (wg_ip, label, restricted) VALUES (?, ?, 1)",
+            (str(ip_obj), label),
+        )
+        db.commit()
+        flash(
+            f"Peer {label} ({ip_obj}) auf dem Server registriert und als eingeschraenkter "
+            f"Client ohne Regeln angelegt. Zugriffsrechte im Dashboard/Netzplan ergaenzen.",
+            "success",
+        )
+    except sqlite3.IntegrityError:
+        flash(
+            f"Peer {label} ({ip_obj}) auf dem Server registriert. Ein Client mit dieser IP "
+            f"existierte in der App bereits - Datensatz nicht veraendert.",
+            "success",
+        )
+    return redirect(url_for("provision"))
 
 
 @app.route("/clients/add", methods=["POST"])

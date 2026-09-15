@@ -1,9 +1,9 @@
 # WireGuard ACL Manager
 
-Docker-Container mit Web-GUI zur Verwaltung, welcher WireGuard-Peer
-im `isurfer.de`-Mesh (`10.250.0.0/24`) auf welche Ziele und Dienste
-zugreifen darf. Setzt auf die iptables-`DOCKER-USER`-Chain auf isurfer.de
-auf (siehe `wireguard`-Repo, Troubleshooting-Abschnitt zu Docker/FORWARD).
+Docker-Container mit Web-GUI zur Verwaltung, welcher WireGuard-Peer in
+einem Hub-and-Spoke-Mesh auf welche Ziele und Dienste zugreifen darf. Setzt
+auf die iptables-`DOCKER-USER`-Chain auf dem Zielserver auf (falls
+vorhanden, sonst auf `FORWARD` - siehe "Allgemeine Nutzung" unten).
 
 Es gibt zwei Betriebsarten (`EXEC_MODE` in `.env`):
 
@@ -17,18 +17,19 @@ Es gibt zwei Betriebsarten (`EXEC_MODE` in `.env`):
 
 ## Funktionsweise (EXEC_MODE=ssh)
 
-- Der Container baut selbst einen WireGuard-Tunnel zu isurfer.de auf (nur
+- Der Container baut selbst einen WireGuard-Tunnel zum Zielserver auf (nur
   zu dessen Tunnel-IP, nicht zum ganzen `/24` - Least Privilege).
-- Über diesen Tunnel verbindet sich der Container per SSH zu isurfer.de
+- Über diesen Tunnel verbindet sich der Container per SSH zum Zielserver
   und verwaltet dort gezielt iptables-Regeln.
 - Für jeden in der App als "eingeschränkt" markierten Client wird eine
   eigene Chain (`WGACL_<ip-mit-unterstrichen>`) angelegt: erst die
   erlaubten `ACCEPT`-Regeln (Ziel + Dienst), dann ein abschließendes
   `DROP`. Ein Sprung dorthin wird oben in `DOCKER-USER` eingefügt - **vor**
-  der bestehenden pauschalen `wg0→wg0`-Regel.
+  einer eventuell bestehenden pauschalen Mesh-Regel.
 - Clients, die nicht in der App auftauchen (oder als "uneingeschränkt"
-  markiert sind), bleiben von der pauschalen Regel abgedeckt - volles Mesh,
-  wie bisher.
+  markiert sind), bleiben von der Grundkonfiguration des Zielservers
+  abgedeckt - was das konkret bedeutet, hängt von eurem Setup ab (siehe
+  Punkt 3 unter "Nutzung").
 
 Im `local`-Modus entfällt der Tunnel/SSH-Schritt komplett: derselbe
 Chain-Mechanismus (`WGACL_*`, `DROP`, Hook in `DOCKER-USER`/`FORWARD`)
@@ -40,12 +41,12 @@ läuft.
 - Docker + Docker Compose installiert (auf dem Admin-Rechner bei
   `EXEC_MODE=ssh`, bzw. auf dem WG-Server selbst bei `EXEC_MODE=local`).
 - Der Client, den du einschränken willst, muss bereits als regulärer
-  WireGuard-Peer auf isurfer.de eingetragen sein (siehe `wireguard`-Repo).
+  WireGuard-Peer auf dem Zielserver eingetragen sein (oder per "Client
+  bereitstellen" neu angelegt werden, siehe "Nutzung").
 - `iptables-persistent` auf dem Zielserver installiert (für dauerhafte
   Regeln über Neustarts hinweg, relevant für **nicht** von dieser App
-  verwaltete Grundregeln) - siehe `wireguard`-Repo, Troubleshooting. Für
-  die von dieser App selbst erzeugten `WGACL_*`-Regeln reicht das nicht
-  zwingend aus (siehe "Persistenz" unten).
+  verwaltete Grundregeln). Für die von dieser App selbst erzeugten
+  `WGACL_*`-Regeln reicht das nicht zwingend aus (siehe "Persistenz" unten).
 
 ## Einrichtung (EXEC_MODE=ssh)
 
@@ -55,7 +56,7 @@ läuft.
 cp .env.example .env
 ```
 
-`.env` ausfüllen: `ISURFER_PUBKEY` und `ISURFER_ENDPOINT` aus eurer
+`.env` ausfüllen: `WG_SERVER_PUBKEY` und `WG_SERVER_ENDPOINT` aus eurer
 bestehenden Doku eintragen, `CONTAINER_WG_IP` auf ein freies Oktett setzen
 (z.B. `10.250.0.250`), `FLASK_SECRET` mit `openssl rand -hex 32` erzeugen.
 Sobald die Web-UI aus einem gemeinsam genutzten Netz erreichbar sein soll,
@@ -76,14 +77,14 @@ docker compose logs -f
 Der Container gibt beim ersten Start zwei Schlüssel aus:
 
 ```
-Container-WG-Public-Key (auf isurfer.de als Peer eintragen, falls noch nicht geschehen):
+Container-WG-Public-Key (auf dem Zielserver als Peer eintragen, falls noch nicht geschehen):
   <WG_PUBKEY>
 
-Container-SSH-Public-Key (auf isurfer.de in ~/.ssh/authorized_keys eintragen):
+Container-SSH-Public-Key (auf dem Zielserver in ~/.ssh/authorized_keys eintragen):
   ssh-ed25519 AAAA... wg-acl-manager
 ```
 
-### 4. Container als WireGuard-Peer auf isurfer.de eintragen
+### 4. Container als WireGuard-Peer auf dem Zielserver eintragen
 
 ```bash
 wg set wg0 peer <WG_PUBKEY> allowed-ips 10.250.0.250/32
@@ -97,12 +98,12 @@ PublicKey = <WG_PUBKEY>
 AllowedIPs = 10.250.0.250/32
 ```
 
-### 5. SSH-Key auf isurfer.de hinterlegen
+### 5. SSH-Key auf dem Zielserver hinterlegen
 
 ```bash
 echo "ssh-ed25519 AAAA... wg-acl-manager" >> ~/.ssh/authorized_keys
 ```
-(auf isurfer.de, im Home-Verzeichnis des in `.env` gewählten `ISURFER_SSH_USER`)
+(auf dem Zielserver, im Home-Verzeichnis des in `.env` gewählten `WG_SERVER_SSH_USER`)
 
 ### 6. Container neu starten und testen
 
@@ -112,7 +113,7 @@ docker compose restart
 
 Web-UI öffnen: http://localhost:8080
 
-Das Dashboard sollte oben den "WireGuard-Status" von isurfer.de anzeigen
+Das Dashboard sollte oben den "WireGuard-Status" des Zielservers anzeigen
 (alle aktuellen Peers mit Handshake-Zeiten) - das bestätigt, dass Tunnel
 und SSH-Zugriff funktionieren.
 
@@ -149,11 +150,13 @@ In `.env`:
 ```
 EXEC_MODE=local
 TARGET_WG_INTERFACE=wg0      # tatsaechlicher Interface-Name auf diesem Host
+WG_SERVER_ENDPOINT=<oeffentliche IP oder Hostname>:<Port>   # fuer "Client bereitstellen"
 FLASK_SECRET=<openssl rand -hex 32>
 ADMIN_USER=<admin>
 ADMIN_PASSWORD=<starkes-passwort>
 ```
-Die `ISURFER_*`-Variablen werden in diesem Modus nicht benötigt/ignoriert.
+Die übrigen `WG_SERVER_*`-Variablen (Pubkey, Tunnel-IP, SSH-User) werden in
+diesem Modus nicht benötigt/ignoriert.
 
 ### 2. Container bauen und starten
 
@@ -186,7 +189,9 @@ iptables-Grundkonfiguration.
 
 1. **Client hinzufügen**: Tunnel-IP + Bezeichnung eintragen. Neu
    hinzugefügte Clients sind standardmäßig "eingeschränkt" - ohne Regeln
-   bedeutet das: **kein** Zugriff auf irgendetwas im Mesh (nur `DROP`).
+   bedeutet das: **kein** Zugriff auf irgendetwas im Mesh (nur `DROP`). Der
+   WireGuard-Peer muss dafür bereits existieren - für einen komplett neuen
+   Peer siehe "Client bereitstellen" (Punkt 9).
 2. **Regeln hinzufügen**: Pro Client Ziel-IP (oder `any`) + Dienst wählen.
    Wird sofort angewendet.
 3. **Einschränkung umschalten**: Ein Client kann jederzeit auf
@@ -229,6 +234,15 @@ iptables-Grundkonfiguration.
    Komplexere (Module, Negation, ...) bleibt als Rohtext zum manuellen
    Nachlesen. Damit lässt sich der reale Ist-Zustand nachvollziehen, bevor
    man ihn in dieser App nachbildet.
+9. **Client bereitstellen**: Zwei-Schritte-Assistent für einen komplett
+   neuen WireGuard-Peer (Windows/Linux/MikroTik). Schritt 1 generiert ein
+   Setup-Skript bzw. eine Config mit einer automatisch vorgeschlagenen
+   freien Tunnel-IP zum Herunterladen und Ausführen auf dem neuen Gerät -
+   der private Schlüssel wird dabei **nur lokal auf diesem Gerät erzeugt
+   und verlässt es nie**. Schritt 2 nimmt den vom Skript ausgegebenen
+   Public Key entgegen und registriert den Peer live (`wg set`, ohne
+   Neustart) sowie dauerhaft (Eintrag in der Server-Config) - und legt
+   einen passenden, eingeschränkten Client-Datensatz ohne Regeln an.
 
 **Peer-Namen im Dashboard/Netzplan:** Die Spalte "Name" im WireGuard-Status
 sowie die Beschriftungen im Netzplan werden aus der WireGuard-Config des
@@ -241,9 +255,10 @@ PublicKey = ...
 AllowedIPs = 10.250.0.5/32
 ```
 Ohne diesen Kommentar wird ersatzweise die IP (oder, falls der Peer als
-Client in der App angelegt ist, dessen "Bezeichnung") angezeigt.
+Client in der App angelegt ist, dessen "Bezeichnung") angezeigt. "Client
+bereitstellen" (Punkt 9) trägt diesen Kommentar automatisch ein.
 
-## Allgemeine Nutzung (nicht nur isurfer.de)
+## Allgemeine Nutzung
 
 Das Tool geht davon aus, dass der Ziel-WireGuard-Server ein Linux-Host mit
 `iptables` ist, bei dem Peer-zu-Peer-Traffic durch den Server selbst
@@ -252,17 +267,16 @@ beim Start/bei jedem "Anwenden" automatisch erkannt und im Dashboard
 angezeigt:
 
 - **Einhängepunkt der Regeln:** Existiert eine `DOCKER-USER`-Chain (typisch
-  bei Servern mit Docker, wie isurfer.de), werden die Client-Chains dort
-  eingehängt. Sonst direkt oben in `FORWARD`.
+  bei Servern mit Docker), werden die Client-Chains dort eingehängt. Sonst
+  direkt oben in `FORWARD`.
 - **IP-Forwarding-Status:** Wird als Warnung angezeigt, falls inaktiv - dann
   liefe die ganze ACL-Logik ins Leere, weil gar kein Peer-zu-Peer-Traffic
   durch den Server geht.
 
 **`TARGET_WG_INTERFACE`** (Standard `wg0`) muss auf den tatsächlichen
 Interface-Namen des Ziel-WG-Servers gesetzt werden - das ist NICHT
-zwangsläufig `wg0`. Beispiel aus unserer eigenen Umgebung: Einer unserer
-MikroTik-Router nutzt `WG-Logging` statt des sonst überall verwendeten
-`wg-isurfer`.
+zwangsläufig `wg0`, z.B. wenn ein Router einen abweichenden Namen für sein
+WireGuard-Interface verwendet.
 
 **Persistenz:** Das Tool versucht `netfilter-persistent save` - ist das auf
 dem Zielserver nicht installiert, werden die Regeln trotzdem angewendet,
@@ -276,10 +290,10 @@ empfehlenswert.
 ## Sicherheitshinweise
 
 - **EXEC_MODE=ssh:** Der SSH-Zugriff erfolgt aktuell mit dem `root`-User auf
-  isurfer.de (Standard in `.env`). Für mehr Härtung: eigenen User auf
-  isurfer.de anlegen, der per `sudoers` nur `iptables`, `netfilter-persistent`
-  und `wg show` ohne Passwort ausführen darf, und `ISURFER_SSH_USER`
-  entsprechend anpassen.
+  dem Zielserver (Standard in `.env`). Für mehr Härtung: eigenen User auf
+  dem Zielserver anlegen, der per `sudoers` nur `iptables`,
+  `netfilter-persistent` und `wg show` ohne Passwort ausführen darf, und
+  `WG_SERVER_SSH_USER` entsprechend anpassen.
 - **EXEC_MODE=local:** Der Container läuft mit `network_mode: host` +
   `cap_add: NET_ADMIN` und hat damit vollen Zugriff auf die Host-Netzwerk-
   konfiguration (nicht nur auf seine eigenen `WGACL_*`-Chains). `ADMIN_USER`/
@@ -297,14 +311,18 @@ empfehlenswert.
   Formular. Trotzdem gilt: Wer Zugriff auf die Web-UI hat, kann beliebige
   iptables-Regeln auf dem Zielserver erzeugen - Zugriff entsprechend
   einschränken (siehe oben).
+- Generierte Client-Configs/-Skripte ("Client bereitstellen") enthalten den
+  Public Key und Endpoint des Servers, aber **keinen** privaten Schlüssel
+  der App oder anderer Peers - der private Schlüssel des neuen Clients wird
+  ausschließlich lokal auf dessen eigenem Gerät erzeugt.
 
 ## Troubleshooting
 
 **Dashboard zeigt "Konnte Status nicht abrufen" (EXEC_MODE=ssh):**
 - Prüfen, ob der WG-Tunnel steht: `docker compose exec wg-acl-manager wg show wg0`
-- Prüfen, ob der SSH-Key auf isurfer.de hinterlegt ist (Schritt 5)
-- Prüfen, ob `ISURFER_WG_IP` in `.env` mit der tatsächlichen Tunnel-IP von
-  isurfer.de übereinstimmt (Standard: `10.250.0.1`)
+- Prüfen, ob der SSH-Key auf dem Zielserver hinterlegt ist (Schritt 5)
+- Prüfen, ob `WG_SERVER_TUNNEL_IP` in `.env` mit der tatsächlichen Tunnel-IP
+  des Zielservers übereinstimmt (Standard: `10.250.0.1`)
 
 **Dashboard zeigt "Konnte Status nicht abrufen" (EXEC_MODE=local):**
 - Prüfen, ob `TARGET_WG_INTERFACE` wirklich dem echten Interface-Namen auf
@@ -328,7 +346,7 @@ empfehlenswert.
 **Regeln werden gespeichert, aber "Anwenden fehlgeschlagen":**
 - EXEC_MODE=ssh: Fehlermeldung aus der Flash-Message zeigt meist direkt die
   SSH-/iptables-Fehlerausgabe. Häufigste Ursache: SSH-Key noch nicht in
-  `authorized_keys`, oder `ISURFER_SSH_USER` hat keine Root-/sudo-Rechte
+  `authorized_keys`, oder `WG_SERVER_SSH_USER` hat keine Root-/sudo-Rechte
   für `iptables`.
 - EXEC_MODE=local: Fehlermeldung zeigt die iptables-Fehlerausgabe direkt.
   Häufigste Ursache: Container läuft nicht mit `NET_ADMIN`/`network_mode:

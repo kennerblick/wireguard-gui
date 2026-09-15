@@ -10,10 +10,10 @@ SAMPLE_DOCKER_USER = """-N DOCKER-USER
 
 def test_annotate_ips_appends_known_names():
     text = "-A DOCKER-USER -s 10.250.0.11/32 -d 10.250.0.1/32 -j ACCEPT"
-    labels = {"10.250.0.11": "RouterRWVT", "10.250.0.1": "isurfer-hub"}
+    labels = {"10.250.0.11": "Buero-Router", "10.250.0.1": "Hub"}
     annotated = app_module.annotate_ips(text, labels)
-    assert "10.250.0.11/32 (RouterRWVT)" in annotated
-    assert "10.250.0.1/32 (isurfer-hub)" in annotated
+    assert "10.250.0.11/32 (Buero-Router)" in annotated
+    assert "10.250.0.1/32 (Hub)" in annotated
 
 
 def test_annotate_ips_leaves_unknown_ips_untouched():
@@ -64,8 +64,8 @@ def test_build_ip_label_map_prefers_config_name_over_client_label(monkeypatch, t
     monkeypatch.setattr(
         app_module,
         "run_on_target",
-        lambda script, timeout=15: (True, "[Peer]\n#RouterRWVT\nPublicKey = x=\nAllowedIPs = 10.250.0.11/32\n"),
+        lambda script, timeout=15: (True, "[Peer]\n#Buero-Router\nPublicKey = x=\nAllowedIPs = 10.250.0.11/32\n"),
     )
     labels = app_module.build_ip_label_map(db)
-    assert labels["10.250.0.11"] == "RouterRWVT"
+    assert labels["10.250.0.11"] == "Buero-Router"
     db.close()

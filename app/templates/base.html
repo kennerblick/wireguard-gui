@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <title>WireGuard ACL Manager - isurfer.de</title>
+    <title>WireGuard ACL Manager</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -10,6 +10,7 @@
         <div class="nav-brand">WireGuard ACL Manager</div>
         <div class="nav-links">
             <a href="{{ url_for('index') }}">Dashboard</a>
+            <a href="{{ url_for('provision') }}">Client bereitstellen</a>
             <a href="{{ url_for('services') }}">Dienste</a>
             <a href="{{ url_for('netzplan') }}">Netzplan</a>
             <a href="{{ url_for('maintenance') }}">Wartung</a>

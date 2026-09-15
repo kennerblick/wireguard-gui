@@ -3,8 +3,8 @@
 ## Was das ist
 
 Docker-Container mit Web-GUI (Flask + SQLite), der verwaltet, welcher
-WireGuard-Peer auf einem Hub-and-Spoke-WireGuard-Server (z.B. `isurfer.de`)
-auf welche Ziele/Dienste zugreifen darf. Erzeugt/entfernt dafür gezielt
+WireGuard-Peer auf einem Hub-and-Spoke-WireGuard-Server auf welche
+Ziele/Dienste zugreifen darf. Erzeugt/entfernt dafür gezielt
 `iptables`-Regeln (eine eigene Chain pro eingeschränktem Client, Sprung
 dorthin aus `DOCKER-USER` bzw. `FORWARD`) - je nach `EXEC_MODE` entweder
 per SSH über einen selbst aufgebauten WG-Tunnel, oder direkt lokal.
@@ -60,8 +60,9 @@ app/app.py              - komplette Anwendungslogik (Routen, DB,
                           run_on_target()=SSH- oder lokale Ausfuehrung,
                           iptables-Script-Generierung, Basic-Auth, Validierung)
 app/templates/          - Jinja2-Templates (base, index=Dashboard, services,
-                          maintenance=verwaiste Chains, netzplan=Graph +
-                          Berechtigungsmatrix)
+                          maintenance=verwaiste Chains + Firewall-Regeln,
+                          netzplan=Graph + Berechtigungsmatrix,
+                          provision=Client bereitstellen)
 app/static/style.css    - Styling
 tests/                  - pytest-Suite fuer Script-Generierung, Validierung,
                           Hook-Erkennung (kein echter SSH-/WG-Zugriff noetig)
@@ -170,36 +171,47 @@ zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
   Negation (`!`) oder Modulen (`-m ...`) werden bewusst NICHT interpretiert
   (nur Rohtext) - das koennte sonst falsche Zugriffs-Aussagen suggerieren.
   Existiert, damit ein Admin den echten Ist-Zustand nachvollziehen kann,
-  bevor er ihn in dieser App nachbildet (siehe "Noch nicht umgesetzt" unten -
-  ein WG-Client-Provisioning-Assistent ist noch offen).
+  bevor er ihn in dieser App nachbildet.
+- **Client bereitstellen** (`/provision`, `/provision/script`,
+  `/provision/register`): Zwei-Schritte-Assistent fuer einen komplett neuen
+  WireGuard-Peer, im Format der bestehenden `setup-wg-client.sh`/`.ps1`/
+  MikroTik-`.rsc`-Skripte des Admins nachgebaut. **Sicherheitsdesign:** das
+  WG-Schluesselpaar wird IMMER lokal auf dem neuen Client erzeugt (im
+  generierten Skript selbst, per `wg genkey`/`wg.exe genkey`) - der private
+  Schluessel verlaesst dieses Geraet nie und wird von wg-acl-manager weder
+  gesehen noch gespeichert. Schritt 1 (`provision_script()`) generiert das
+  Skript/die Config mit einer per `suggest_free_ip()` vorgeschlagenen freien
+  IP (aus der [Interface]-Address der Ziel-Config abgeleitetes Subnetz,
+  abzueglich aller Peers laut Config + Clients laut DB) sowie dem live
+  ermittelten Server-Pubkey (`wg show <iface> public-key`) und
+  `WG_SERVER_ENDPOINT`. Schritt 2 (`provision_register()`) nimmt den vom
+  Skript ausgegebenen Public Key entgegen (`validate_wg_pubkey()` - Base64,
+  32 Byte), registriert den Peer live per `wg set` UND persistent per
+  Config-Anhang (`register_peer_on_target()`, idempotent via
+  Pubkey-Grep-Check) und legt einen eingeschraenkten Client-Datensatz ohne
+  Regeln an (macht bewusst keine Annahme ueber Zugriffsrechte, siehe oben).
+  Optionale rsyslog-/MikroTik-Logging-Konfiguration im generierten Skript
+  ueber `PROVISION_SYSLOG_PORT_LINUX`/`PROVISION_SYSLOG_PORT_MIKROTIK`
+  (Host wird aus der Ziel-Config abgeleitet, keine eigene Env-Variable
+  noetig).
+- **Generische Variablennamen**: `ISURFER_*` (an einen konkreten Server
+  gebunden) wurde zu `WG_SERVER_*` umbenannt
+  (`WG_SERVER_PUBKEY`/`_ENDPOINT`/`_TUNNEL_IP`/`_SSH_USER`).
+  `_env_with_legacy_fallback()` liest weiterhin die alten `ISURFER_*`-Namen,
+  falls die neuen nicht gesetzt sind (mit Hinweis im Log) - bestehende
+  `.env`-Dateien brechen dadurch nicht.
 
 ## Noch nicht umgesetzt / bekannte Lücken
 
 Verbleibend, in etwa nach Wichtigkeit sortiert:
 
-1. **WG-Client-Provisioning-Assistent fehlt noch.** "Neuen Client
-   hinzufügen" legt aktuell nur einen ACL-Datensatz fuer einen bereits
-   existierenden WireGuard-Peer an - **nicht** den Peer selbst. Gewuenscht
-   (noch offen): ein Assistent, der fuer neue Windows-/Linux-/MikroTik-
-   Clients per Knopfdruck ein WG-Schluesselpaar erzeugt, dem Ziel-Server
-   einen neuen `[Peer]`-Block (inkl. `#Name`-Kommentar) hinzufuegt, die
-   Config live uebernimmt (`wg set`/`wg syncconf`, ohne Neustart) und dem
-   Admin die fertige Client-Config (bzw. ein RouterOS-Script fuer MikroTik)
-   zum Download anbietet. Sicherheitsrelevant: der generierte Private Key
-   darf nur einmalig angezeigt/heruntergeladen, NICHT in der App-DB
-   persistiert werden. Braucht ausserdem eine Quelle fuer den oeffentlichen
-   Endpoint des Ziel-Servers (Host:Port) und eine IP-Allokationsstrategie
-   fuer das Subnetz - beides noch zu klaeren. Das bestehende
-   `wireguard`-Repo hat dafuer offenbar schon Skripte
-   (`setup-wg-client.sh`/`.ps1`, siehe README) - ggf. deren Logik/Format
-   uebernehmen statt komplett neu zu entwerfen.
-2. **Kein CSRF-Schutz.** Alle State-ändernden Routen sind reine POST-Forms
+1. **Kein CSRF-Schutz.** Alle State-ändernden Routen sind reine POST-Forms
    ohne Token; die Basic-Auth schützt vor fremdem Zugriff, aber nicht vor
    Cross-Site-Request-Forgery aus einem Browser, der bereits angemeldet ist.
    Bei Bedarf `flask-wtf`/eigenes Double-Submit-Token ergänzen.
-3. **`run_on_target()` hat keinen Retry/Backoff** bei transienten Netzwerkfehlern
+2. **`run_on_target()` hat keinen Retry/Backoff** bei transienten Netzwerkfehlern
    (nur die Verbindungswiederverwendung wurde ergänzt, kein Retry).
-4. **Login ist reine Basic-Auth ohne Rate-Limiting/Lockout** - für ein rein
+3. **Login ist reine Basic-Auth ohne Rate-Limiting/Lockout** - für ein rein
    lokales/vertrauenswürdiges Netz ausreichend, für Exposition darüber
    hinaus wäre ein härterer Login-Mechanismus (z.B. hinter einem
    Reverse-Proxy mit OAuth) vorzuziehen.
@@ -215,7 +227,7 @@ da diese nur in SQLite landen:
 ```bash
 cd app
 pip install flask waitress
-ISURFER_WG_IP=127.0.0.1 python app.py
+WG_SERVER_TUNNEL_IP=127.0.0.1 python app.py
 ```
 
 Für einen echten End-to-End-Test braucht es einen echten Linux-Server mit

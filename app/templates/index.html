@@ -125,8 +125,9 @@
 
     <datalist id="known-destinations">
         <option value="any">
-        <option value="10.250.0.1">isurfer.de (Hub)</option>
-        <option value="10.250.0.12">srvadmin / Graylog</option>
+        {% for ip, label in known_destinations %}
+        <option value="{{ ip }}">{{ label }}</option>
+        {% endfor %}
     </datalist>
 </section>
 
@@ -139,9 +140,12 @@
         <button type="submit" class="btn btn-primary">Hinzufuegen</button>
     </form>
     <p class="muted small">
-        Hinweis: Der Client muss bereits als WireGuard-Peer auf isurfer.de eingetragen sein
-        (siehe wireguard-Repo, <code>setup-wg-client.sh</code> bzw. <code>setup-wg-client.ps1</code>).
-        Diese App verwaltet nur die Firewall-Regeln, nicht die WireGuard-Peers selbst.
+        Hinweis: Der Client muss bereits als WireGuard-Peer auf dem Zielserver
+        eingetragen sein - siehe "Client bereitstellen" fuer einen komplett
+        neuen Peer, oder "Peers importieren" unten, um bereits vorhandene
+        Peers zu erfassen. Diese App verwaltet nur die Firewall-Regeln, nicht
+        die WireGuard-Peers selbst (Ausnahme: "Client bereitstellen"
+        registriert einen neuen Peer zusaetzlich auf dem Server).
     </p>
 </section>
 

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="panel">
+    <h2>Client bereitstellen</h2>
+    <p class="muted small">
+        Halbautomatische Einrichtung eines neuen WireGuard-Clients in zwei
+        Schritten: (1) Config/Skript für den neuen Client generieren und auf
+        dem Zielgerät ausführen - der private Schlüssel wird dabei
+        <strong>nur lokal auf diesem Gerät erzeugt und verlässt es nie</strong>;
+        (2) den dabei ausgegebenen Public Key hier eintragen, um den Peer auf
+        dem WireGuard-Server zu registrieren.
+    </p>
+    {% if ip_error %}
+    <p class="error-text">{{ ip_error }}</p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>Schritt 1: Config/Skript generieren</h2>
+    <form method="get" action="{{ url_for('provision_script') }}" class="inline-form">
+        <input type="text" name="label" placeholder="Name, z.B. Mitarbeiter Max" required>
+        <input type="text" name="ip" value="{{ suggested_ip or '' }}" placeholder="Tunnel-IP" required>
+        <select name="platform" required>
+            <option value="linux">Linux</option>
+            <option value="windows">Windows</option>
+            <option value="mikrotik">MikroTik</option>
+        </select>
+        <button type="submit" class="btn btn-primary">Herunterladen</button>
+    </form>
+    <p class="muted small">
+        Vorgeschlagene IP ist die nächste freie im konfigurierten Subnetz -
+        bei Bedarf überschreiben. Linux: Bash-Skript auf dem neuen Rechner
+        mit <code>sudo</code> ausführen. Windows: PowerShell-Skript als
+        Administrator ausführen (benötigt installiertes WireGuard für
+        Windows). MikroTik: Skript-Inhalt komplett ins RouterOS-Terminal
+        (Winbox oder SSH) einfügen.
+    </p>
+</section>
+
+<section class="panel">
+    <h2>Schritt 2: Peer auf dem Server registrieren</h2>
+    <form method="post" action="{{ url_for('provision_register') }}" class="inline-form">
+        <input type="text" name="label" placeholder="Name (wie in Schritt 1)" required>
+        <input type="text" name="ip" placeholder="Tunnel-IP (wie in Schritt 1)" required>
+        <input type="text" name="pubkey" placeholder="Public Key aus der Skript-Ausgabe" required class="mono">
+        <button type="submit" class="btn btn-primary">Registrieren</button>
+    </form>
+    <p class="muted small">
+        Trägt den Peer live per <code>wg set</code> ein (wirkt sofort, ohne
+        Neustart) und hängt einen <code>[Peer]</code>-Block mit
+        <code>#Name</code>-Kommentar an die Server-Config an (damit er einen
+        Neustart übersteht). Legt zusätzlich einen eingeschränkten
+        Client-Datensatz ohne Regeln in dieser App an.
+    </p>
+</section>
+
+{% endblock %}

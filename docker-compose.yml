@@ -9,12 +9,15 @@ services:
       - /dev/net/tun
     environment:
       - EXEC_MODE=ssh
-      - ISURFER_PUBKEY=${ISURFER_PUBKEY}
-      - ISURFER_ENDPOINT=${ISURFER_ENDPOINT}
+      # WG_SERVER_* sind die aktuellen Variablennamen; die alten ISURFER_*-
+      # Namen werden als Fallback durchgereicht, falls eure .env noch die
+      # frueheren Namen verwendet.
+      - WG_SERVER_PUBKEY=${WG_SERVER_PUBKEY:-${ISURFER_PUBKEY}}
+      - WG_SERVER_ENDPOINT=${WG_SERVER_ENDPOINT:-${ISURFER_ENDPOINT}}
       - CONTAINER_WG_IP=${CONTAINER_WG_IP:-10.250.0.250}
-      - ISURFER_WG_IP=${ISURFER_WG_IP:-10.250.0.1}
+      - WG_SERVER_TUNNEL_IP=${WG_SERVER_TUNNEL_IP:-${ISURFER_WG_IP:-10.250.0.1}}
       - TARGET_WG_INTERFACE=${TARGET_WG_INTERFACE:-wg0}
-      - ISURFER_SSH_USER=${ISURFER_SSH_USER:-root}
+      - WG_SERVER_SSH_USER=${WG_SERVER_SSH_USER:-${ISURFER_SSH_USER:-root}}
       - FLASK_SECRET=${FLASK_SECRET:-change-me-in-production}
       - ADMIN_USER=${ADMIN_USER:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}

@@ -22,7 +22,11 @@ mkdir -p /data/wg /data/ssh
 chmod 700 /data/wg /data/ssh
 
 CONTAINER_WG_IP="${CONTAINER_WG_IP:-10.250.0.250}"
-ISURFER_WG_IP="${ISURFER_WG_IP:-10.250.0.1}"
+# WG_SERVER_* sind die aktuellen Variablennamen; ISURFER_* wird noch als
+# Fallback akzeptiert, damit bestehende .env-Dateien weiter funktionieren.
+WG_SERVER_TUNNEL_IP="${WG_SERVER_TUNNEL_IP:-${ISURFER_WG_IP:-10.250.0.1}}"
+WG_SERVER_PUBKEY="${WG_SERVER_PUBKEY:-${ISURFER_PUBKEY:-}}"
+WG_SERVER_ENDPOINT="${WG_SERVER_ENDPOINT:-${ISURFER_ENDPOINT:-}}"
 
 ### 1) WireGuard-Schluesselpaar erzeugen (nur beim allerersten Start) ###
 if [ ! -f /data/wg/privatekey ]; then
@@ -40,14 +44,14 @@ fi
 chmod 600 /data/ssh/id_ed25519
 
 ### 3) WireGuard-Konfiguration schreiben ###
-if [ -z "${ISURFER_PUBKEY:-}" ] || [ -z "${ISURFER_ENDPOINT:-}" ]; then
+if [ -z "${WG_SERVER_PUBKEY}" ] || [ -z "${WG_SERVER_ENDPOINT}" ]; then
   echo "=================================================================="
-  echo "FEHLER: ISURFER_PUBKEY und/oder ISURFER_ENDPOINT nicht gesetzt."
+  echo "FEHLER: WG_SERVER_PUBKEY und/oder WG_SERVER_ENDPOINT nicht gesetzt."
   echo "Bitte in der .env-Datei eintragen (siehe .env.example) und den"
   echo "Container neu starten."
   echo "=================================================================="
   echo ""
-  echo "Dein Container-Public-Key (fuer den Peer-Eintrag auf isurfer.de):"
+  echo "Dein Container-Public-Key (fuer den Peer-Eintrag auf dem Zielserver):"
   echo "  ${CONTAINER_WG_PUBKEY}"
   echo ""
   sleep 3600
@@ -60,9 +64,9 @@ PrivateKey = $(cat /data/wg/privatekey)
 Address = ${CONTAINER_WG_IP}/32
 
 [Peer]
-PublicKey = ${ISURFER_PUBKEY}
-Endpoint = ${ISURFER_ENDPOINT}
-AllowedIPs = ${ISURFER_WG_IP}/32
+PublicKey = ${WG_SERVER_PUBKEY}
+Endpoint = ${WG_SERVER_ENDPOINT}
+AllowedIPs = ${WG_SERVER_TUNNEL_IP}/32
 PersistentKeepalive = 25
 EOF
 chmod 600 /etc/wireguard/wg0.conf
@@ -76,19 +80,19 @@ wg-quick up wg0 || {
 echo "=================================================================="
 echo "WireGuard-Tunnel aktiv. Container-IP: ${CONTAINER_WG_IP}"
 echo ""
-echo "Container-WG-Public-Key (auf isurfer.de als Peer eintragen, falls noch nicht geschehen):"
+echo "Container-WG-Public-Key (auf dem Zielserver als Peer eintragen, falls noch nicht geschehen):"
 echo "  ${CONTAINER_WG_PUBKEY}"
 echo ""
-echo "Container-SSH-Public-Key (auf isurfer.de in ~/.ssh/authorized_keys eintragen):"
+echo "Container-SSH-Public-Key (auf dem Zielserver in ~/.ssh/authorized_keys eintragen):"
 cat /data/ssh/id_ed25519.pub
 echo "=================================================================="
 
 ### 5) Kurzer Verbindungstest (nicht fatal, nur Hinweis) ###
 sleep 2
-if ping -c1 -W2 "${ISURFER_WG_IP}" >/dev/null 2>&1; then
-  echo "[entrypoint] isurfer.de (${ISURFER_WG_IP}) ist per Ping erreichbar."
+if ping -c1 -W2 "${WG_SERVER_TUNNEL_IP}" >/dev/null 2>&1; then
+  echo "[entrypoint] Zielserver (${WG_SERVER_TUNNEL_IP}) ist per Ping erreichbar."
 else
-  echo "[entrypoint] WARNUNG: isurfer.de (${ISURFER_WG_IP}) antwortet nicht auf Ping. Pruefe den Peer-Eintrag auf isurfer.de."
+  echo "[entrypoint] WARNUNG: Zielserver (${WG_SERVER_TUNNEL_IP}) antwortet nicht auf Ping. Pruefe den Peer-Eintrag auf dem Zielserver."
 fi
 
 ### 6) App starten (Produktions-WSGI-Server statt Flask-Dev-Server) ###
