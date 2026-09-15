@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="panel">
+    <div class="panel-header">
+        <h2>Verwaiste iptables-Chains</h2>
+        <form method="post" action="{{ url_for('cleanup_orphaned_chains') }}"
+              onsubmit="return confirm('Alle verwaisten WGACL_-Chains auf dem Zielserver entfernen?');">
+            <button type="submit" class="btn btn-primary" {% if not orphaned %}disabled{% endif %}>
+                Verwaiste Chains bereinigen
+            </button>
+        </form>
+    </div>
+    <p class="muted small">
+        Chains, die auf dem Zielserver existieren, aber zu keinem aktuellen Client
+        in dieser App gehoeren (z.B. weil ein Client direkt in der Datenbank
+        geloescht wurde statt ueber "Entfernen"). Diese Seite fragt den Zielserver
+        live per SSH ab.
+    </p>
+    {% if remote_error %}
+        <p class="error-text">Konnte Chains nicht abrufen: {{ remote_error }}</p>
+    {% elif orphaned %}
+        <table class="rules-table">
+            <thead><tr><th>Chain</th><th>Vermutete IP</th></tr></thead>
+            <tbody>
+                {% for chain in orphaned %}
+                <tr>
+                    <td class="mono">{{ chain }}</td>
+                    <td class="mono">{{ chain[6:].replace("_", ".") }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="muted">Keine verwaisten Chains gefunden.</p>
+    {% endif %}
+</section>
+
+{% endblock %}

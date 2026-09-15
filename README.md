@@ -36,10 +36,11 @@ auf (siehe `wireguard`-Repo, Troubleshooting-Abschnitt zu Docker/FORWARD).
 cp .env.example .env
 ```
 
-`.env` ausfüllen: `ISURFER_PUBKEY` und `ISURFER_ENDPOINT` stehen schon
-korrekt drin (aus eurer bestehenden Doku), `CONTAINER_WG_IP` auf ein
-freies Oktett setzen (z.B. `10.250.0.250`), `FLASK_SECRET` mit
-`openssl rand -hex 32` erzeugen.
+`.env` ausfüllen: `ISURFER_PUBKEY` und `ISURFER_ENDPOINT` aus eurer
+bestehenden Doku eintragen, `CONTAINER_WG_IP` auf ein freies Oktett setzen
+(z.B. `10.250.0.250`), `FLASK_SECRET` mit `openssl rand -hex 32` erzeugen.
+Sobald die Web-UI aus einem gemeinsam genutzten Netz erreichbar sein soll,
+zusätzlich `ADMIN_USER`/`ADMIN_PASSWORD` setzen (siehe Sicherheitshinweise).
 
 ### 2. Container bauen und starten
 
@@ -109,6 +110,9 @@ und SSH-Zugriff funktionieren.
 4. **Dienste verwalten**: Unter "Dienste" eigene Ports/Protokolle
    ergänzen, zusätzlich zu den mitgelieferten Standarddiensten (SSH, RDP,
    HTTPS-Alt 8443, PostgreSQL, Proxmox VE, HTTP, HTTPS, "Alle Ports").
+5. **Wartung**: Unter "Wartung" lassen sich verwaiste `WGACL_*`-Chains auf
+   dem Zielserver finden und entfernen - z.B. wenn ein Client-Datensatz
+   direkt in der Datenbank gelöscht wurde statt über "Entfernen" in der UI.
 
 ## Allgemeine Nutzung (nicht nur isurfer.de)
 
@@ -144,9 +148,17 @@ aber mit einer Warnung im Log, dass sie einen Neustart nicht überleben.
   entsprechend anpassen.
 - `FLASK_SECRET` unbedingt individuell setzen (nicht den Default aus
   `.env.example` übernehmen).
-- Die Web-UI selbst hat aktuell **keine Authentifizierung** - nur für den
-  lokalen Rechner/vertrauenswürdiges Netz gedacht. Bei Bedarf einen
-  Reverse-Proxy mit Basic-Auth oder OAuth davorsetzen.
+- Die Web-UI hat standardmäßig **keine Authentifizierung** - nur für den
+  lokalen Rechner/vertrauenswürdiges Netz gedacht. Sobald der Port darüber
+  hinaus erreichbar ist, `ADMIN_USER`/`ADMIN_PASSWORD` in `.env` setzen -
+  dann verlangt die App HTTP-Basic-Auth. Alternativ/zusätzlich einen
+  Reverse-Proxy mit OAuth davorsetzen.
+- Ziel-IPs/CIDRs und Dienst-Protokolle/-Ports werden serverseitig validiert
+  (`ipaddress`-Modul bzw. Whitelist), bevor sie in das generierte
+  iptables-Script einfließen - das schließt Command-Injection über das
+  Formular. Trotzdem gilt: Wer Zugriff auf die Web-UI hat, kann beliebige
+  iptables-Regeln auf dem Zielserver erzeugen - Zugriff entsprechend
+  einschränken (siehe oben).
 
 ## Troubleshooting
 
@@ -161,3 +173,19 @@ aber mit einer Warnung im Log, dass sie einen Neustart nicht überleben.
   Fehlerausgabe. Häufigste Ursache: SSH-Key noch nicht in
   `authorized_keys`, oder `ISURFER_SSH_USER` hat keine Root-/sudo-Rechte
   für `iptables`.
+
+## Entwicklung & Tests
+
+Im Container läuft die App produktiv über `waitress` (WSGI). Für lokale
+UI-Iteration ohne Docker/echten WG-Server reicht der Flask-Dev-Server
+(siehe `CLAUDE.md`).
+
+Unit-Tests (v.a. für die iptables-Script-Generierung und Eingabevalidierung)
+liegen unter `tests/`:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+CI (`.github/workflows/tests.yml`) führt diese Tests bei jedem Push aus.

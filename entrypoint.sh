@@ -74,5 +74,6 @@ else
   echo "[entrypoint] WARNUNG: isurfer.de (${ISURFER_WG_IP}) antwortet nicht auf Ping. Pruefe den Peer-Eintrag auf isurfer.de."
 fi
 
-### 6) App starten ###
-exec python /app/app.py
+### 6) App starten (Produktions-WSGI-Server statt Flask-Dev-Server) ###
+cd /app
+exec waitress-serve --host=0.0.0.0 --port=8080 app:app

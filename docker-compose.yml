@@ -15,6 +15,8 @@ services:
       - TARGET_WG_INTERFACE=${TARGET_WG_INTERFACE:-wg0}
       - ISURFER_SSH_USER=${ISURFER_SSH_USER:-root}
       - FLASK_SECRET=${FLASK_SECRET:-change-me-in-production}
+      - ADMIN_USER=${ADMIN_USER:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     ports:
       - "8080:8080"
     volumes:

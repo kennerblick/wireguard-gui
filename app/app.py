@@ -1,19 +1,34 @@
+import hmac
+import ipaddress
 import os
+import re
 import sqlite3
 import subprocess
 import datetime
 
-from flask import Flask, g, render_template, request, redirect, url_for, flash
+from flask import Flask, Response, g, render_template, request, redirect, url_for, flash
 
 DB_PATH = "/data/db/wgacl.db"
 SSH_KEY = "/data/ssh/id_ed25519"
+SSH_CONTROL_DIR = os.path.dirname(SSH_KEY)
 
 ISURFER_WG_IP = os.environ.get("ISURFER_WG_IP", "10.250.0.1")
 ISURFER_SSH_USER = os.environ.get("ISURFER_SSH_USER", "root")
 TARGET_WG_INTERFACE = os.environ.get("TARGET_WG_INTERFACE", "wg0")
 
+ADMIN_USER = os.environ.get("ADMIN_USER", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+if not ADMIN_USER or not ADMIN_PASSWORD:
+    print(
+        "[app] WARNUNG: ADMIN_USER/ADMIN_PASSWORD nicht gesetzt - "
+        "die Web-UI ist ohne Anmeldung erreichbar (siehe README/.env.example)."
+    )
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
+
+VALID_PROTOCOLS = {"tcp", "udp", "all"}
+SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9 _.\-()]{1,64}$")
 
 BUILTIN_SERVICES = [
     # name, protocol, port  (port=None -> alle Ports)
@@ -28,7 +43,34 @@ BUILTIN_SERVICES = [
 ]
 
 
+@app.before_request
+def require_basic_auth():
+    if not ADMIN_USER or not ADMIN_PASSWORD:
+        return None
+    if request.endpoint == "static":
+        return None
+    auth = request.authorization
+    if (
+        auth
+        and hmac.compare_digest(auth.username or "", ADMIN_USER)
+        and hmac.compare_digest(auth.password or "", ADMIN_PASSWORD)
+    ):
+        return None
+    return Response(
+        "Anmeldung erforderlich.",
+        401,
+        {"WWW-Authenticate": 'Basic realm="WireGuard ACL Manager"'},
+    )
+
+
+_db_ready = False
+
+
 def get_db():
+    global _db_ready
+    if not _db_ready:
+        init_db()
+        _db_ready = True
     if "db" not in g:
         g.db = sqlite3.connect(DB_PATH)
         g.db.row_factory = sqlite3.Row
@@ -116,6 +158,29 @@ def chain_name(ip: str) -> str:
     return "WGACL_" + ip.replace(".", "_")
 
 
+def chain_name_to_ip(chain: str) -> str:
+    """Kehrt chain_name() um (nur fuer IPv4-Adressen verlaesslich)."""
+    return chain[len("WGACL_"):].replace("_", ".")
+
+
+def validate_dest_ip(dest_ip: str):
+    """Normalisiert und validiert eine Ziel-IP/CIDR-Eingabe.
+
+    Gibt "any" oder eine gueltige IP/CIDR zurueck, sonst None. Der Rueckgabewert
+    landet unvalidiert in einem per SSH ausgefuehrten Bash-Script
+    (build_apply_script) - ohne diese Pruefung waere das ein Einfallstor fuer
+    Command-Injection ueber das Ziel-IP-Formularfeld.
+    """
+    dest = dest_ip.strip()
+    if dest.lower() in ("any", "0.0.0.0/0", ""):
+        return "any"
+    try:
+        ipaddress.ip_network(dest, strict=False)
+    except ValueError:
+        return None
+    return dest
+
+
 def ssh_run(script: str, timeout: int = 15):
     """Fuehrt ein Bash-Script auf dem Ziel-WG-Server per SSH aus (ueber den WG-Tunnel)."""
     try:
@@ -125,6 +190,12 @@ def ssh_run(script: str, timeout: int = 15):
                 "-i", SSH_KEY,
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "ConnectTimeout=8",
+                # Verbindung zwischen mehreren ssh_run()-Aufrufen (z.B. bei
+                # "Alle anwenden" fuer viele Clients) wiederverwenden statt
+                # jedes Mal neu aufzubauen.
+                "-o", "ControlMaster=auto",
+                "-o", f"ControlPath={SSH_CONTROL_DIR}/cm-%r@%h:%p",
+                "-o", "ControlPersist=60s",
                 f"{ISURFER_SSH_USER}@{ISURFER_WG_IP}",
                 "bash", "-s",
             ],
@@ -222,20 +293,31 @@ def fetch_wg_status():
         return None, out
     peers = []
     for i, line in enumerate(out.strip().splitlines()):
-        parts = line.split("\t")
         if i == 0:
             continue  # erste Zeile ist das Interface selbst
-        if len(parts) >= 7:
-            pubkey, _, endpoint, allowed_ips, latest_hs, rx, tx = parts[:7]
-            peers.append({
-                "pubkey": pubkey,
-                "endpoint": endpoint,
-                "allowed_ips": allowed_ips,
-                "latest_handshake": latest_hs,
-                "rx": rx,
-                "tx": tx,
-            })
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue  # unerwartetes Format - Zeile ueberspringen statt abzustuerzen
+        pubkey, _, endpoint, allowed_ips, latest_hs, rx, tx = parts[:7]
+        peers.append({
+            "pubkey": pubkey,
+            "endpoint": endpoint,
+            "allowed_ips": allowed_ips,
+            "latest_handshake": latest_hs,
+            "rx": rx,
+            "tx": tx,
+        })
     return peers, None
+
+
+def list_remote_wgacl_chains():
+    """Listet alle WGACL_*-Chains auf dem Zielserver auf (ok, chains_oder_fehlertext)."""
+    ok, out = ssh_run(
+        "iptables-save 2>/dev/null | grep -oE '^:WGACL_[A-Za-z0-9_]+' | sed 's/^://' | sort -u"
+    )
+    if not ok:
+        return False, out
+    return True, [c for c in out.split() if c]
 
 
 # --------------------------------------------------------------------------
@@ -330,8 +412,12 @@ def delete_client(client_id):
 def add_rule():
     db = get_db()
     client_id = int(request.form["client_id"])
-    dest_ip = request.form["dest_ip"].strip()
+    dest_ip_raw = request.form["dest_ip"].strip()
     service_id = int(request.form["service_id"])
+    dest_ip = validate_dest_ip(dest_ip_raw)
+    if dest_ip is None:
+        flash(f"Ungueltige Ziel-IP/CIDR: {dest_ip_raw!r}", "error")
+        return redirect(url_for("index"))
     db.execute(
         "INSERT INTO rules (client_id, dest_ip, service_id, created_at) VALUES (?, ?, ?, ?)",
         (client_id, dest_ip, service_id, datetime.datetime.utcnow().isoformat()),
@@ -404,9 +490,25 @@ def services():
 def add_service():
     db = get_db()
     name = request.form["name"].strip()
-    protocol = request.form["protocol"].strip()
+    protocol = request.form["protocol"].strip().lower()
     port_raw = request.form.get("port", "").strip()
-    port = int(port_raw) if port_raw else None
+
+    if not SERVICE_NAME_RE.match(name):
+        flash("Ungueltiger Dienstname (erlaubt: Buchstaben, Zahlen, Leerzeichen, . _ - ( )).", "error")
+        return redirect(url_for("services"))
+    if protocol not in VALID_PROTOCOLS:
+        flash(f"Ungueltiges Protokoll: {protocol!r}", "error")
+        return redirect(url_for("services"))
+
+    port = None
+    if port_raw:
+        if not port_raw.isdigit() or not (1 <= int(port_raw) <= 65535):
+            flash("Port muss eine Zahl zwischen 1 und 65535 sein.", "error")
+            return redirect(url_for("services"))
+        port = int(port_raw)
+    if protocol == "all":
+        port = None
+
     try:
         db.execute(
             "INSERT INTO services (name, protocol, port, is_builtin) VALUES (?, ?, ?, 0)",
@@ -436,6 +538,48 @@ def delete_service(service_id):
     return redirect(url_for("services"))
 
 
+@app.route("/maintenance")
+def maintenance():
+    db = get_db()
+    clients = db.execute("SELECT wg_ip FROM clients").fetchall()
+    known_chains = {chain_name(c["wg_ip"]) for c in clients}
+    ok, result = list_remote_wgacl_chains()
+    orphaned = []
+    remote_error = None
+    if ok:
+        orphaned = sorted(c for c in result if c not in known_chains)
+    else:
+        remote_error = result
+    return render_template("maintenance.html", orphaned=orphaned, remote_error=remote_error)
+
+
+@app.route("/maintenance/cleanup", methods=["POST"])
+def cleanup_orphaned_chains():
+    db = get_db()
+    clients = db.execute("SELECT wg_ip FROM clients").fetchall()
+    known_chains = {chain_name(c["wg_ip"]) for c in clients}
+    ok, result = list_remote_wgacl_chains()
+    if not ok:
+        flash(f"Konnte verwaiste Chains nicht ermitteln: {result}", "error")
+        return redirect(url_for("maintenance"))
+
+    hook_chain = detect_hook_chain()
+    removed, errors = [], []
+    for chain in result:
+        if chain in known_chains:
+            continue
+        ip_guess = chain_name_to_ip(chain)
+        rok, rout = ssh_run(build_remove_script(ip_guess, hook_chain))
+        (removed if rok else errors).append(chain)
+
+    if removed:
+        flash(f"{len(removed)} verwaiste Chain(s) entfernt: {', '.join(removed)}", "success")
+    if errors:
+        flash(f"Fehler beim Entfernen von: {', '.join(errors)}", "error")
+    if not removed and not errors:
+        flash("Keine verwaisten Chains gefunden.", "success")
+    return redirect(url_for("maintenance"))
+
+
 if __name__ == "__main__":
-    init_db()
     app.run(host="0.0.0.0", port=8080)

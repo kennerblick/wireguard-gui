@@ -28,15 +28,21 @@ welcher Peer wohin darf, statt der bisherigen Alles-oder-nichts-Regel.
 ## Architektur in Kürze
 
 ```
-app/app.py          - komplette Anwendungslogik (Routen, DB, SSH-Aufrufe,
-                       iptables-Script-Generierung)
-app/templates/       - Jinja2-Templates (base, index=Dashboard, services)
+app/app.py           - komplette Anwendungslogik (Routen, DB, SSH-Aufrufe,
+                       iptables-Script-Generierung, Basic-Auth, Validierung)
+app/templates/       - Jinja2-Templates (base, index=Dashboard, services,
+                       maintenance=verwaiste Chains)
 app/static/style.css - Styling
+tests/               - pytest-Suite fuer Script-Generierung, Validierung,
+                       Hook-Erkennung (kein echter SSH-/WG-Zugriff noetig)
+.github/workflows/   - CI (pytest bei jedem Push)
 entrypoint.sh         - Container-Start: WG-Keypair + SSH-Keypair erzeugen
-                       (persistiert unter /data), wg0 hochfahren, App starten
+                       (persistiert unter /data), wg0 hochfahren,
+                       App per waitress starten
 Dockerfile           - Basis-Image + Systempakete (wireguard-tools,
                        openssh-client) + Python-Deps
 docker-compose.yml   - lokale Deployment-Definition
+requirements-dev.txt - zusaetzliche Dev-/Test-Abhaengigkeiten (pytest)
 .env.example         - Konfigurationsvorlage
 ```
 
@@ -63,52 +69,47 @@ zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
   - Automatische Docker- vs. Nicht-Docker-Erkennung für den Hook-Punkt
   - `ip_forward`-Status wird geprüft und im Dashboard als Warnung angezeigt
   - Persistenz (`netfilter-persistent`) wird versucht, aber nicht vorausgesetzt
+- **Optionale HTTP-Basic-Auth** (`ADMIN_USER`/`ADMIN_PASSWORD` in `.env`) -
+  ohne gesetzte Werte bleibt die App wie bisher offen (mit Startup-Warnung im
+  Log), damit bestehende Deployments nicht brechen.
+- **Produktions-WSGI-Server**: `entrypoint.sh` startet die App im Container
+  über `waitress-serve` statt des Flask-Dev-Servers; `app.run()` bleibt nur
+  für lokale Entwicklung (`python app.py`) erhalten.
+- **Eingabevalidierung gegen Command-Injection**: `validate_dest_ip()`
+  (Modul `ipaddress`) prüft jede Ziel-IP/CIDR vor dem Insert; `add_service()`
+  validiert Protokoll gegen eine Whitelist (`tcp`/`udp`/`all`) und Namen
+  gegen eine Zeichen-Whitelist, bevor die Werte in das per SSH ausgeführte
+  iptables-Script einfließen.
+- **SSH-Verbindungswiederverwendung** über `ControlMaster`/`ControlPersist`
+  in `ssh_run()` - `apply_all` mit vielen Clients baut nicht mehr pro Aktion
+  eine neue SSH-Verbindung auf.
+- **Aufräumen verwaister Chains**: neue Seite "Wartung" listet `WGACL_*`-
+  Chains auf dem Zielserver ohne zugehörigen DB-Client auf und kann sie
+  gezielt entfernen (`list_remote_wgacl_chains()`,
+  `/maintenance/cleanup`).
+- **`fetch_wg_status()`** überspringt Zeilen mit unerwartetem Format statt
+  mit einem Exception abzustürzen.
+- **Unit-Tests** (`tests/`, `pytest`) für Script-Generierung
+  (`build_apply_script`/`build_remove_script`), Eingabevalidierung und
+  Hook-Erkennung; CI via `.github/workflows/tests.yml`.
 
 ## Noch nicht umgesetzt / bekannte Lücken
 
-Das hier ist der eigentliche Auftrag für diese Session - bitte in dieser
-Reihenfolge angehen (grob nach Wichtigkeit für Produktivbetrieb):
+Verbleibend, in etwa nach Wichtigkeit sortiert:
 
-1. **Keine Authentifizierung der Web-UI.** Aktuell nur für "lokaler Rechner,
-   vertrauenswürdiges Netz" gedacht. Sinnvoll wäre mindestens ein simpler
-   Login (Flask-Login o.ä. oder Basic-Auth per `.env`-Passwort), damit man
-   den Port auch mal in ein gemeinsames Netz exponieren könnte.
-2. **Flask-Dev-Server statt Produktions-WSGI-Server.** `app.run()` in
-   `app.py` sollte durch `gunicorn`/`waitress` ersetzt werden (im
-   Dockerfile/Entrypoint entsprechend anpassen).
-3. **Keine automatisierten Tests.** Insbesondere `build_apply_script()` und
-   `build_remove_script()` sollten Unit-Tests bekommen (reine String-
-   Generierung, leicht testbar ohne echten SSH-Zugriff) - Regressionen bei
-   der iptables-Regel-Syntax sind hier besonders schmerzhaft, weil Fehler
-   erst live auf einem Produktivserver auffallen.
-4. **`ssh_run()` hat keinen Retry/Backoff** und keinen Verbindungs-Pool -
-   bei vielen Regeln/Clients wird für jede Aktion eine neue SSH-Verbindung
-   aufgebaut. Für kleine Setups (< 20 Clients) unkritisch, könnte aber bei
-   `apply_all` mit vielen Clients spürbar langsam werden. Ggf. `ControlMaster`/
-   `ControlPersist` in den SSH-Optionen nutzen, um eine Verbindung
-   wiederzuverwenden.
-5. **Keine Validierung von Nutzereingaben** über simple SQL-Parameter-
-   Bindung hinaus - `dest_ip` und Service-Namen werden nicht auf Plausibilität
-   geprüft (z.B. ob `dest_ip` wirklich eine gültige IP/CIDR ist). Da der Wert
-   direkt in ein generiertes Shell-Script einfließt (`build_apply_script`),
-   ist das ein potenzielles Command-Injection-Risiko, wenn die Web-UI mal
-   nicht mehr nur vom Admin selbst bedient wird. **Sollte vor jeder
-   Mehrbenutzer-Nutzung behoben werden** - IP/CIDR-Validierung (z.B. mit
-   Pythons `ipaddress`-Modul) und Whitelisting erlaubter Zeichen für
-   Service-Namen ergänzen.
-6. **Kein Wegräumen verwaister Chains.** Wenn ein Client-Datensatz direkt in
-   der SQLite-DB gelöscht wird (statt über die "Entfernen"-Aktion in der
-   UI), bleibt seine iptables-Chain auf dem Zielserver zurück. Ein
-   Abgleichs-/Cleanup-Mechanismus (z.B. beim Start alle `WGACL_*`-Chains
-   ohne zugehörigen DB-Eintrag auflisten und zum Löschen vorschlagen) wäre
-   sinnvoll.
-7. **Bulk-Import fehlt.** Für Erstbefüllung bei einem bestehenden WG-Netz
+1. **Kein CSRF-Schutz.** Alle State-ändernden Routen sind reine POST-Forms
+   ohne Token; die Basic-Auth schützt vor fremdem Zugriff, aber nicht vor
+   Cross-Site-Request-Forgery aus einem Browser, der bereits angemeldet ist.
+   Bei Bedarf `flask-wtf`/eigenes Double-Submit-Token ergänzen.
+2. **`ssh_run()` hat keinen Retry/Backoff** bei transienten Netzwerkfehlern
+   (nur die Verbindungswiederverwendung wurde ergänzt, kein Retry).
+3. **Bulk-Import fehlt.** Für Erstbefüllung bei einem bestehenden WG-Netz
    mit vielen Peers wäre ein CSV-Import (Client-Liste) hilfreich, statt
    jeden einzeln über das Formular anzulegen.
-8. **`fetch_wg_status()` parsed `wg show ... dump` recht simpel** (Split auf
-   Tabs, erwartet genau 7+ Felder) - bei Peers ohne Endpoint (nie verbunden)
-   kann das Format leicht abweichen; sollte robuster gegen fehlende Felder
-   gemacht werden.
+4. **Login ist reine Basic-Auth ohne Rate-Limiting/Lockout** - für ein rein
+   lokales/vertrauenswürdiges Netz ausreichend, für Exposition darüber
+   hinaus wäre ein härterer Login-Mechanismus (z.B. hinter einem
+   Reverse-Proxy mit OAuth) vorzuziehen.
 
 ## Lokales Testen ohne echten WG-Server
 
@@ -120,10 +121,20 @@ da diese nur in SQLite landen:
 
 ```bash
 cd app
-pip install flask
+pip install flask waitress
 ISURFER_WG_IP=127.0.0.1 python app.py
 ```
 
 Für einen echten End-to-End-Test braucht es einen echten Linux-Server mit
 WireGuard + iptables, zu dem der Test-Rechner selbst eine WG-Verbindung
 aufbauen kann (z.B. eine Wegwerf-VM).
+
+## Unit-Tests
+
+Reine Logik (Script-Generierung, Validierung, Hook-Erkennung) ist ohne
+echten SSH-/WG-Zugriff testbar:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
