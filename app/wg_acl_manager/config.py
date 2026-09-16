@@ -83,7 +83,7 @@ def _parse_ip_range(env_name: str, default: str) -> tuple:
 # irgendeine freie IP im gesamten Subnetz zu nehmen. Ueberschreibbar, falls
 # ein Deployment eine andere Aufteilung als diese (aus einer echten
 # Produktiv-Config abgeleitete) Standardaufteilung nutzt.
-IP_RANGE_SERVER = _parse_ip_range("IP_RANGE_SERVER", "2-50")
+IP_RANGE_SERVER = _parse_ip_range("IP_RANGE_SERVER", "11-50")
 IP_RANGE_ROUTER = _parse_ip_range("IP_RANGE_ROUTER", "100-150")
 IP_RANGE_CLIENT = _parse_ip_range("IP_RANGE_CLIENT", "201-245")
 IP_RANGES_BY_KIND = {"server": IP_RANGE_SERVER, "router": IP_RANGE_ROUTER, "client": IP_RANGE_CLIENT}

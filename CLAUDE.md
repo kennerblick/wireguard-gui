@@ -443,7 +443,7 @@ jeweiligen Client aus.
     auf der Berechtigungen-Seite, sofort wirksam per `onchange`).
   - **Getrennte IP-Bereiche je Typ** (`config.IP_RANGES_BY_KIND`,
     `IP_RANGE_SERVER`/`IP_RANGE_ROUTER`/`IP_RANGE_CLIENT`-Env-Variablen,
-    Format `"start-end"` als letztes Oktett, Standard `2-50`/`100-150`/
+    Format `"start-end"` als letztes Oktett, Standard `11-50`/`100-150`/
     `201-245` - aus einer echten Produktiv-Config abgeleitet): "Client
     bereitstellen" hat oben einen Typ-Umschalter (`?kind=`), der Schritt 1's
     vorgeschlagene IP auf den passenden Bereich einschraenkt
