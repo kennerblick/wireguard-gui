@@ -30,7 +30,7 @@
                     <td class="mono small">{{ p.pubkey[:16] }}...</td>
                     <td>{{ p.endpoint }}</td>
                     <td>{{ p.allowed_ips }}</td>
-                    <td>{{ p.latest_handshake if p.latest_handshake != "0" else "nie" }}</td>
+                    <td>{{ "vor " ~ p.latest_handshake_secs_ago ~ "s" if p.latest_handshake_secs_ago is not none else "nie" }}</td>
                     <td>{{ p.rx }} / {{ p.tx }}</td>
                 </tr>
                 {% else %}

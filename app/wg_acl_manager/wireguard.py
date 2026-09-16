@@ -6,6 +6,7 @@ per "wg show".
 import ipaddress
 import re
 import subprocess
+import time
 
 from . import config
 
@@ -72,10 +73,15 @@ def run_on_target(script: str, timeout: int = 15):
 
 
 def fetch_wg_status():
+    """Liest "wg show <iface> dump". "latest_handshake" aus dieser Ausgabe
+    ist ein UNIX-Timestamp (Sekunden seit Epoch, "0" = nie) - fuer die
+    Anzeige direkt nutzlos, daher zusaetzlich "latest_handshake_secs_ago"
+    (verstrichene Sekunden seit dem Handshake, None bei "nie")."""
     ok, out = run_on_target(f"wg show {config.TARGET_WG_INTERFACE} dump")
     if not ok:
         return None, out
     peers = []
+    now = int(time.time())
     for i, line in enumerate(out.strip().splitlines()):
         if i == 0:
             continue  # erste Zeile ist das Interface selbst
@@ -83,11 +89,16 @@ def fetch_wg_status():
         if len(parts) < 7:
             continue  # unerwartetes Format - Zeile ueberspringen statt abzustuerzen
         pubkey, _, endpoint, allowed_ips, latest_hs, rx, tx = parts[:7]
+        try:
+            hs_epoch = int(latest_hs)
+        except ValueError:
+            hs_epoch = 0
         peers.append({
             "pubkey": pubkey,
             "endpoint": endpoint,
             "allowed_ips": allowed_ips,
             "latest_handshake": latest_hs,
+            "latest_handshake_secs_ago": (now - hs_epoch) if hs_epoch > 0 else None,
             "rx": rx,
             "tx": tx,
         })
