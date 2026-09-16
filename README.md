@@ -192,8 +192,10 @@ iptables-Grundkonfiguration.
    bedeutet das: **kein** Zugriff auf irgendetwas im Mesh (nur `DROP`). Der
    WireGuard-Peer muss dafür bereits existieren - für einen komplett neuen
    Peer siehe "Client bereitstellen" (Punkt 9).
-2. **Regeln hinzufügen**: Pro Client Ziel-IP (oder `any`) + Dienst wählen.
-   Wird sofort angewendet.
+2. **Regeln hinzufügen**: Pro Client entweder eine Ziel-IP/CIDR (oder `any`)
+   **oder** eine Gruppe + Dienst wählen. Wird sofort angewendet. Eine
+   Gruppen-Regel ("erlaube Zugriff auf alle MikroTiks") gilt für alle
+   aktuellen Mitglieder dieser Gruppe - siehe Punkt 10 ("Gruppen").
 3. **Einschränkung umschalten**: Ein Client kann jederzeit auf
    "uneingeschränkt" gesetzt werden - dann baut diese App ihre eigene Chain
    für ihn zurück, und es greift wieder das, was ohne wg-acl-manager auf dem
@@ -243,6 +245,37 @@ iptables-Grundkonfiguration.
    Public Key entgegen und registriert den Peer live (`wg set`, ohne
    Neustart) sowie dauerhaft (Eintrag in der Server-Config) - und legt
    einen passenden, eingeschränkten Client-Datensatz ohne Regeln an.
+   Zusätzlich wird automatisch eine zur Plattform passende Gruppe
+   zugewiesen (`linux`, `windows` oder `mikrotik`, siehe Punkt 10) - so
+   lassen sich plattformweite Regeln ("erlaube Zugriff für alle MikroTiks")
+   ohne weiteren manuellen Schritt sofort nutzen.
+10. **Gruppen**: Unter "Gruppen" lassen sich beliebige Gruppen (Tags) anlegen,
+    umbenennen und löschen - z.B. `mikrotik`, `server`, `buero`. Jeder Client
+    kann auf dem Dashboard mehreren Gruppen gleichzeitig zugeordnet werden
+    (Checkbox-Zeile in der Client-Karte). Beim Anlegen einer Regel (Punkt 2)
+    kann statt einer einzelnen Ziel-IP eine Gruppe gewählt werden - die Regel
+    gilt dann für **alle aktuellen Mitglieder** dieser Gruppe, z.B. "erlaube
+    HTTPS-Zugriff auf alle MikroTiks". Ändert sich die Gruppenzugehörigkeit
+    (neues Mitglied, entferntes Mitglied), wirkt sich das erst nach erneutem
+    "Anwenden" für den jeweiligen Client aus - konsistent mit allen anderen
+    Änderungen. Im Netzplan wird eine Gruppen-Regel als eine Kante zu einem
+    Sammel-Knoten "Gruppe: &lt;Name&gt;" dargestellt, statt zu jedem
+    Mitglied einzeln, um den Graphen übersichtlich zu halten.
+11. **Verwaltete Netze (LAN hinter einem Router, z.B. MikroTik)**: Viele
+    MikroTik-Router verwalten selbst ein eigenes lokales Netz (z.B.
+    `192.168.88.0/24`). In der Client-Karte im Dashboard lässt sich unter
+    "Verwaltete Netze" eine Liste solcher Netze (kommagetrennt) hinterlegen -
+    genauso bei "Client bereitstellen" direkt beim Anlegen eines neuen
+    MikroTik-Clients. Diese Netze werden danach im Ziel-Feld beim
+    Regel-Hinzufügen als bekanntes Ziel vorgeschlagen ("LAN hinter
+    RouterA"), sodass sich Zugriff auf das Netz hinter einem Router erlauben
+    lässt, ohne die CIDR auswendig eintippen zu müssen. Wichtig: die App
+    trägt diese Netze zusätzlich automatisch in die `AllowedIPs` des Peers
+    auf dem WireGuard-Server ein (live per `wg set`, dauerhaft in der
+    Server-Config) - ohne das würde der Server Pakete an dieses Netz gar
+    nicht erst zum Router weiterleiten, unabhängig von den ACL-Regeln
+    dieser App. Beim "Peers importieren" werden bereits so konfigurierte
+    Netze automatisch erkannt und übernommen.
 
 **Peer-Namen im Dashboard/Netzplan:** Die Spalte "Name" im WireGuard-Status
 sowie die Beschriftungen im Netzplan werden aus der WireGuard-Config des

@@ -80,6 +80,34 @@
             </div>
         </div>
 
+        <div class="client-tags-row">
+            <span class="muted small">Gruppen:</span>
+            {% if all_tags %}
+            <form method="post" action="{{ url_for('set_client_tags', client_id=client.id) }}" class="inline-form client-tags-form">
+                {% set my_tag_ids = client_tag_ids.get(client.id, []) %}
+                {% for t in all_tags %}
+                <label class="checkbox-label tag-checkbox">
+                    <input type="checkbox" name="tag_ids" value="{{ t.id }}" {% if t.id in my_tag_ids %}checked{% endif %}>
+                    {{ t.name }}
+                </label>
+                {% endfor %}
+                <button type="submit" class="btn btn-tiny">Speichern</button>
+            </form>
+            {% else %}
+            <span class="muted small">Noch keine Gruppen angelegt (siehe "Gruppen" oben).</span>
+            {% endif %}
+        </div>
+
+        <div class="client-tags-row">
+            <span class="muted small">Verwaltete Netze (LAN hinter diesem Client, z.B. MikroTik):</span>
+            <form method="post" action="{{ url_for('set_client_networks', client_id=client.id) }}" class="inline-form">
+                <input type="text" name="networks" class="mono"
+                       value="{{ client_networks.get(client.id, []) | map(attribute='cidr') | join(', ') }}"
+                       placeholder="z.B. 192.168.88.0/24, 192.168.5.0/24">
+                <button type="submit" class="btn btn-tiny">Speichern</button>
+            </form>
+        </div>
+
         {% if client.restricted %}
         <table class="rules-table">
             <thead>
@@ -88,7 +116,13 @@
             <tbody>
                 {% for rule in rules_by_client.get(client.id, []) %}
                 <tr>
-                    <td class="mono">{{ rule.dest_ip }}</td>
+                    <td class="mono">
+                        {% if rule.dest_tag_id %}
+                            <span class="badge badge-group">Gruppe: {{ rule.tag_name }}</span>
+                        {% else %}
+                            {{ rule.dest_ip }}
+                        {% endif %}
+                    </td>
                     <td>{{ rule.service_name }}</td>
                     <td class="mono small">
                         {% if rule.port %}{{ rule.protocol }}/{{ rule.port }}{% else %}alle{% endif %}
@@ -107,7 +141,14 @@
 
         <form method="post" action="{{ url_for('add_rule') }}" class="inline-form">
             <input type="hidden" name="client_id" value="{{ client.id }}">
-            <input type="text" name="dest_ip" placeholder="Ziel-IP (z.B. 10.250.0.12) oder 'any'" list="known-destinations" required>
+            <input type="text" name="dest_ip" placeholder="Ziel-IP (z.B. 10.250.0.12) oder 'any'" list="known-destinations">
+            <span class="muted small">oder</span>
+            <select name="dest_tag_id">
+                <option value="">— Gruppe waehlen —</option>
+                {% for t in all_tags %}
+                <option value="{{ t.id }}">Gruppe: {{ t.name }}</option>
+                {% endfor %}
+            </select>
             <select name="service_id" required>
                 {% for s in services_flat %}
                 <option value="{{ s.id }}">{{ s.name }}{% if s.port %} ({{ s.protocol }}/{{ s.port }}){% endif %}</option>
@@ -115,6 +156,16 @@
             </select>
             <button type="submit" class="btn btn-small">+ Regel hinzufuegen</button>
         </form>
+        <p class="muted small">
+            Ziel entweder als IP/CIDR (bzw. "any") ODER als Gruppe waehlen -
+            nicht beides. Bei einer Gruppe gilt die Regel fuer alle aktuellen
+            Mitglieder; Aenderungen an der Gruppenmitgliedschaft wirken sich
+            erst nach erneutem "Anwenden" fuer diesen Client aus. Das
+            Ziel-Feld schlaegt per Autovervollstaendigung auch verwaltete
+            Netze vor (z.B. "LAN hinter RouterA") - so laesst sich Zugriff
+            auf ein Netz hinter einem MikroTik-Router erlauben, ohne die
+            CIDR auswendig einzutippen.
+        </p>
         {% else %}
         <p class="muted">Dieser Client ist nicht eingeschraenkt und nutzt die normale Mesh-Regel (Zugriff auf alle Peers).</p>
         {% endif %}
@@ -127,6 +178,9 @@
         <option value="any">
         {% for ip, label in known_destinations %}
         <option value="{{ ip }}">{{ label }}</option>
+        {% endfor %}
+        {% for cidr, label in known_networks %}
+        <option value="{{ cidr }}">{{ label }}</option>
         {% endfor %}
     </datalist>
 </section>

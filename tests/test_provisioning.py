@@ -1,69 +1,68 @@
 import base64
+import sqlite3
 
-import app as app_module
+from wg_acl_manager import config, db, provisioning, wireguard
 
 VALID_PUBKEY = base64.b64encode(b"x" * 32).decode()
 
 
 def test_validate_wg_pubkey_accepts_valid_key():
-    assert app_module.validate_wg_pubkey(VALID_PUBKEY) == VALID_PUBKEY
-    assert app_module.validate_wg_pubkey(f"  {VALID_PUBKEY}  ") == VALID_PUBKEY
+    assert provisioning.validate_wg_pubkey(VALID_PUBKEY) == VALID_PUBKEY
+    assert provisioning.validate_wg_pubkey(f"  {VALID_PUBKEY}  ") == VALID_PUBKEY
 
 
 def test_validate_wg_pubkey_rejects_wrong_length_or_garbage():
-    assert app_module.validate_wg_pubkey("not-base64-!!!") is None
-    assert app_module.validate_wg_pubkey(base64.b64encode(b"short").decode()) is None
-    assert app_module.validate_wg_pubkey("") is None
+    assert provisioning.validate_wg_pubkey("not-base64-!!!") is None
+    assert provisioning.validate_wg_pubkey(base64.b64encode(b"short").decode()) is None
+    assert provisioning.validate_wg_pubkey("") is None
 
 
 def test_fetch_wg_interface_info_parses_address_and_listen_port(monkeypatch):
-    config = "[Interface]\nPrivateKey = xxx\nAddress = 10.250.0.1/24\nListenPort = 51820\n\n[Peer]\n#x\n"
-    monkeypatch.setattr(app_module, "run_on_target", lambda script, timeout=15: (True, config))
-    info = app_module.fetch_wg_interface_info()
+    sample = "[Interface]\nPrivateKey = xxx\nAddress = 10.250.0.1/24\nListenPort = 51820\n\n[Peer]\n#x\n"
+    monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (True, sample))
+    info = wireguard.fetch_wg_interface_info()
     assert info == {"address": "10.250.0.1/24", "listen_port": "51820"}
 
 
 def test_suggest_free_ip_skips_used_addresses(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_module, "DB_PATH", str(tmp_path / "test.db"))
-    app_module.init_db()
-    import sqlite3
-    db = sqlite3.connect(app_module.DB_PATH)
-    db.row_factory = sqlite3.Row
-    db.execute("INSERT INTO clients (wg_ip, label, restricted) VALUES ('10.250.0.2', 'a', 1)")
-    db.commit()
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+    db.init_db()
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("INSERT INTO clients (wg_ip, label, restricted) VALUES ('10.250.0.2', 'a', 1)")
+    conn.commit()
 
     monkeypatch.setattr(
-        app_module, "fetch_wg_interface_info", lambda: {"address": "10.250.0.1/29"}
+        wireguard, "fetch_wg_interface_info", lambda: {"address": "10.250.0.1/29"}
     )
     monkeypatch.setattr(
-        app_module,
+        wireguard,
         "fetch_wg_peers_from_config",
-        lambda: [{"name": "x", "pubkey": "k", "allowed_ips": "10.250.0.3/32"}],
+        lambda: [{"name": "x", "pubkey": "k", "allowed_ips": "10.250.0.3/32", "actual_ip": None}],
     )
 
-    ip, err = app_module.suggest_free_ip(db)
+    ip, err = provisioning.suggest_free_ip(conn)
     assert err is None
     # .1 = Interface selbst, .2 = DB-Client, .3 = Peer laut Config -> .4 ist frei
     assert ip == "10.250.0.4"
-    db.close()
+    conn.close()
 
 
 def test_suggest_free_ip_reports_error_without_address(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_module, "DB_PATH", str(tmp_path / "test.db"))
-    app_module.init_db()
-    import sqlite3
-    db = sqlite3.connect(app_module.DB_PATH)
-    db.row_factory = sqlite3.Row
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+    db.init_db()
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
 
-    monkeypatch.setattr(app_module, "fetch_wg_interface_info", lambda: {})
-    ip, err = app_module.suggest_free_ip(db)
+    monkeypatch.setattr(wireguard, "fetch_wg_interface_info", lambda: {})
+    ip, err = provisioning.suggest_free_ip(conn)
     assert ip is None
     assert err
-    db.close()
+    conn.close()
 
 
 def test_render_linux_script_substitutes_all_tokens_and_includes_syslog():
-    script = app_module.render_linux_script(
+    script = provisioning.render_linux_script(
         "Mitarbeiter Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820",
         "10.250.0.0/24", "10.250.0.1",
     )
@@ -77,7 +76,7 @@ def test_render_linux_script_substitutes_all_tokens_and_includes_syslog():
 
 
 def test_render_linux_script_without_syslog_host_omits_block():
-    script = app_module.render_linux_script(
+    script = provisioning.render_linux_script(
         "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24", None
     )
     assert "@@" not in script
@@ -85,7 +84,7 @@ def test_render_linux_script_without_syslog_host_omits_block():
 
 
 def test_render_windows_script_substitutes_tokens():
-    script = app_module.render_windows_script(
+    script = provisioning.render_windows_script(
         "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24"
     )
     assert "@@" not in script
@@ -95,7 +94,7 @@ def test_render_windows_script_substitutes_tokens():
 
 
 def test_render_mikrotik_script_splits_endpoint_host_and_port():
-    script = app_module.render_mikrotik_script(
+    script = provisioning.render_mikrotik_script(
         "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24", "10.250.0.1"
     )
     assert "@@" not in script
@@ -112,8 +111,8 @@ def test_register_peer_on_target_builds_expected_script(monkeypatch):
         captured["script"] = script
         return True, "ok"
 
-    monkeypatch.setattr(app_module, "run_on_target", fake_run_on_target)
-    ok, out = app_module.register_peer_on_target(VALID_PUBKEY, "10.250.0.210", "Max")
+    monkeypatch.setattr(wireguard, "run_on_target", fake_run_on_target)
+    ok, out = provisioning.register_peer_on_target(VALID_PUBKEY, "10.250.0.210", "Max")
     assert ok is True
     assert f"wg set wg0 peer {VALID_PUBKEY} allowed-ips 10.250.0.210/32" in captured["script"]
     assert "#Max" in captured["script"]

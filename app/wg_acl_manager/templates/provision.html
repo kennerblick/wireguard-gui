@@ -26,6 +26,7 @@
             <option value="windows">Windows</option>
             <option value="mikrotik">MikroTik</option>
         </select>
+        <input type="text" name="networks" placeholder="Verwaltete Netze, z.B. 192.168.88.0/24 (nur MikroTik, optional)">
         <button type="submit" class="btn btn-primary">Herunterladen</button>
     </form>
     <p class="muted small">
@@ -34,7 +35,12 @@
         mit <code>sudo</code> ausführen. Windows: PowerShell-Skript als
         Administrator ausführen (benötigt installiertes WireGuard für
         Windows). MikroTik: Skript-Inhalt komplett ins RouterOS-Terminal
-        (Winbox oder SSH) einfügen.
+        (Winbox oder SSH) einfügen. "Verwaltete Netze": falls der Router ein
+        eigenes LAN dahinter hat (z.B. <code>192.168.88.0/24</code>), hier
+        eintragen (mehrere durch Komma getrennt) - erzeugt die passenden
+        Firewall-Freigaben im Skript und wird in Schritt 2 automatisch in die
+        AllowedIPs des Peers auf dem Server übernommen, damit Rückverkehr zu
+        diesem Netz tatsächlich geroutet wird.
     </p>
 </section>
 
@@ -43,7 +49,13 @@
     <form method="post" action="{{ url_for('provision_register') }}" class="inline-form">
         <input type="text" name="label" placeholder="Name (wie in Schritt 1)" required>
         <input type="text" name="ip" placeholder="Tunnel-IP (wie in Schritt 1)" required>
+        <select name="platform">
+            <option value="linux">Linux</option>
+            <option value="windows">Windows</option>
+            <option value="mikrotik">MikroTik</option>
+        </select>
         <input type="text" name="pubkey" placeholder="Public Key aus der Skript-Ausgabe" required class="mono">
+        <input type="text" name="networks" placeholder="Verwaltete Netze (wie in Schritt 1, optional)">
         <button type="submit" class="btn btn-primary">Registrieren</button>
     </form>
     <p class="muted small">
@@ -51,7 +63,12 @@
         Neustart) und hängt einen <code>[Peer]</code>-Block mit
         <code>#Name</code>-Kommentar an die Server-Config an (damit er einen
         Neustart übersteht). Legt zusätzlich einen eingeschränkten
-        Client-Datensatz ohne Regeln in dieser App an.
+        Client-Datensatz ohne Regeln in dieser App an und weist automatisch
+        eine zur Plattform passende Gruppe zu (z.B. "mikrotik") - unter
+        "Gruppen" frei änderbar. "Verwaltete Netze" (falls angegeben) werden
+        zusätzlich zur eigenen Tunnel-IP in die AllowedIPs dieses Peers auf
+        dem Server aufgenommen und als Rule-Ziel-Vorschlag hinterlegt -
+        nachträglich änderbar über die Client-Karte im Dashboard.
     </p>
 </section>
 

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="panel">
+    <h2>Gruppen</h2>
+    <p class="muted small">
+        Gruppen fassen Clients zusammen, damit ACL-Regeln nicht IP fuer IP,
+        sondern auf eine ganze Klasse von Peers zielen koennen - z.B.
+        "erlaube Zugriff auf alle MikroTiks". Ein Client kann mehreren
+        Gruppen angehoeren; die Zuordnung erfolgt auf dem Dashboard bei
+        jedem Client. Wird eine Gruppe geloescht, verschwinden auch Regeln,
+        die auf sie zielten - betroffene Clients danach erneut "anwenden".
+    </p>
+    {% if not tags %}
+    <p class="muted">Noch keine Gruppen angelegt.</p>
+    {% else %}
+    <table class="rules-table">
+        <thead>
+            <tr><th>Name</th><th>Mitglieder</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for t in tags %}
+            <tr>
+                <td>{{ t.name }}</td>
+                <td class="small">
+                    {% set members = members_by_tag.get(t.id, []) %}
+                    {% if members %}
+                        {{ members | map(attribute="label") | join(", ") }}
+                    {% else %}
+                        <span class="muted">keine</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <form method="post" action="{{ url_for('delete_tag', tag_id=t.id) }}"
+                          onsubmit="return confirm('Gruppe {{ t.name }} wirklich loeschen? Regeln, die darauf zielen, werden mit entfernt.');">
+                        <button type="submit" class="btn btn-tiny btn-danger">Loeschen</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>Neue Gruppe anlegen</h2>
+    <form method="post" action="{{ url_for('add_tag') }}" class="inline-form">
+        <input type="text" name="name" placeholder="Name, z.B. mikrotik oder server" required>
+        <button type="submit" class="btn btn-primary">Anlegen</button>
+    </form>
+</section>
+
+{% endblock %}

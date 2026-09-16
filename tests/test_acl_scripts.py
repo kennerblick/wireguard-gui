@@ -1,4 +1,4 @@
-from app import (
+from wg_acl_manager.firewall import (
     build_apply_script,
     build_remove_script,
     chain_name,

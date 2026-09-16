@@ -1,4 +1,4 @@
-import app as app_module
+from wg_acl_manager import acl, wireguard
 
 SAMPLE_CONFIG = """
 [Interface]
@@ -29,8 +29,8 @@ AllowedIPs = 10.250.0.0/24
 
 
 def test_fetch_wg_peers_from_config_parses_name_pubkey_allowed_ips(monkeypatch):
-    monkeypatch.setattr(app_module, "run_on_target", lambda script, timeout=15: (True, SAMPLE_CONFIG))
-    peers = app_module.fetch_wg_peers_from_config()
+    monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (True, SAMPLE_CONFIG))
+    peers = wireguard.fetch_wg_peers_from_config()
     assert len(peers) == 4
     assert peers[0] == {
         "name": "Buero-Router",
@@ -44,8 +44,8 @@ def test_fetch_wg_peers_from_config_parses_name_pubkey_allowed_ips(monkeypatch):
 
 
 def test_fetch_wg_peers_from_config_parses_explicit_ip_comment(monkeypatch):
-    monkeypatch.setattr(app_module, "run_on_target", lambda script, timeout=15: (True, SAMPLE_CONFIG))
-    peers = app_module.fetch_wg_peers_from_config()
+    monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (True, SAMPLE_CONFIG))
+    peers = wireguard.fetch_wg_peers_from_config()
     admin_peer = peers[3]
     assert admin_peer["name"] == "PC-Admin"
     assert admin_peer["allowed_ips"] == "10.250.0.0/24"
@@ -54,22 +54,22 @@ def test_fetch_wg_peers_from_config_parses_explicit_ip_comment(monkeypatch):
 
 def test_peer_own_ip_prefers_explicit_ip_over_allowed_ips_network():
     peer = {"allowed_ips": "10.250.0.0/24", "actual_ip": "10.250.0.201"}
-    assert app_module.peer_own_ip(peer) == "10.250.0.201"
+    assert wireguard.peer_own_ip(peer) == "10.250.0.201"
 
 
 def test_peer_own_ip_falls_back_to_allowed_ips_when_no_explicit_ip():
     peer = {"allowed_ips": "10.250.0.5/32", "actual_ip": None}
-    assert app_module.peer_own_ip(peer) == "10.250.0.5"
+    assert wireguard.peer_own_ip(peer) == "10.250.0.5"
 
 
 def test_fetch_wg_peers_from_config_empty_on_failure(monkeypatch):
-    monkeypatch.setattr(app_module, "run_on_target", lambda script, timeout=15: (False, "no such file"))
-    assert app_module.fetch_wg_peers_from_config() == []
+    monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (False, "no such file"))
+    assert wireguard.fetch_wg_peers_from_config() == []
 
 
 def test_peer_lookup_maps_builds_pubkey_and_ip_maps(monkeypatch):
-    monkeypatch.setattr(app_module, "run_on_target", lambda script, timeout=15: (True, SAMPLE_CONFIG))
-    pubkey_to_name, ip_to_name = app_module.peer_lookup_maps()
+    monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (True, SAMPLE_CONFIG))
+    pubkey_to_name, ip_to_name = wireguard.peer_lookup_maps()
     assert pubkey_to_name == {
         "pubkey-router==": "Buero-Router",
         "pubkey-max==": "Mitarbeiter Max",
@@ -89,6 +89,6 @@ def test_peer_lookup_maps_builds_pubkey_and_ip_maps(monkeypatch):
 
 
 def test_diff_target_sets():
-    added, removed = app_module.diff_target_sets({"10.0.0.1", "10.0.0.2"}, {"10.0.0.2", "10.0.0.3"})
+    added, removed = acl.diff_target_sets({"10.0.0.1", "10.0.0.2"}, {"10.0.0.2", "10.0.0.3"})
     assert added == {"10.0.0.3"}
     assert removed == {"10.0.0.1"}

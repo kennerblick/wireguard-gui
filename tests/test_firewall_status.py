@@ -1,4 +1,6 @@
-import app as app_module
+import sqlite3
+
+from wg_acl_manager import acl, config, db, firewall, wireguard
 
 SAMPLE_DOCKER_USER = """-N DOCKER-USER
 -A DOCKER-USER -s 10.250.0.11/32 -d 10.250.0.1/32 -p tcp --dport 22 -j ACCEPT
@@ -11,19 +13,19 @@ SAMPLE_DOCKER_USER = """-N DOCKER-USER
 def test_annotate_ips_appends_known_names():
     text = "-A DOCKER-USER -s 10.250.0.11/32 -d 10.250.0.1/32 -j ACCEPT"
     labels = {"10.250.0.11": "Buero-Router", "10.250.0.1": "Hub"}
-    annotated = app_module.annotate_ips(text, labels)
+    annotated = firewall.annotate_ips(text, labels)
     assert "10.250.0.11/32 (Buero-Router)" in annotated
     assert "10.250.0.1/32 (Hub)" in annotated
 
 
 def test_annotate_ips_leaves_unknown_ips_untouched():
     text = "-A FORWARD -s 10.0.0.99/32 -j DROP"
-    annotated = app_module.annotate_ips(text, {})
+    annotated = firewall.annotate_ips(text, {})
     assert annotated == text
 
 
 def test_parse_iptables_rules_extracts_simple_rules():
-    rules = app_module.parse_iptables_rules(SAMPLE_DOCKER_USER)
+    rules = firewall.parse_iptables_rules(SAMPLE_DOCKER_USER)
     simple = [r for r in rules if r["simple"]]
     # ACCEPT-Regel, DROP-Regel und die unbedingte "-j RETURN" sind alle
     # "einfach" (kein -m/!) - nur die state-Regel wird ausgeklammert.
@@ -43,7 +45,7 @@ def test_parse_iptables_rules_extracts_simple_rules():
 
 
 def test_parse_iptables_rules_flags_rules_with_modules_as_not_simple():
-    rules = app_module.parse_iptables_rules(SAMPLE_DOCKER_USER)
+    rules = firewall.parse_iptables_rules(SAMPLE_DOCKER_USER)
     non_simple_targets = [r["raw"] for r in rules if not r["simple"]]
     assert any("-m state" in raw for raw in non_simple_targets)
     # Die Chain-Deklaration selbst (-N) wird komplett ignoriert, nicht als Regel gezaehlt.
@@ -51,21 +53,20 @@ def test_parse_iptables_rules_flags_rules_with_modules_as_not_simple():
 
 
 def test_build_ip_label_map_prefers_config_name_over_client_label(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_module, "DB_PATH", str(tmp_path / "test.db"))
-    app_module.init_db()
-    import sqlite3
-    db = sqlite3.connect(app_module.DB_PATH)
-    db.row_factory = sqlite3.Row
-    db.execute(
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+    db.init_db()
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
         "INSERT INTO clients (wg_ip, label, restricted) VALUES ('10.250.0.11', 'Mein eigener Name', 1)"
     )
-    db.commit()
+    conn.commit()
 
     monkeypatch.setattr(
-        app_module,
+        wireguard,
         "run_on_target",
         lambda script, timeout=15: (True, "[Peer]\n#Buero-Router\nPublicKey = x=\nAllowedIPs = 10.250.0.11/32\n"),
     )
-    labels = app_module.build_ip_label_map(db)
+    labels = acl.build_ip_label_map(conn)
     assert labels["10.250.0.11"] == "Buero-Router"
-    db.close()
+    conn.close()

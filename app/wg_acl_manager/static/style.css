@@ -60,6 +60,23 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 2rem 4rem; }
 .client-actions { display: flex; gap: 0.5rem; }
 .client-actions form { display: inline; }
 
+.client-tags-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px dashed #2d3748;
+}
+.client-tags-form { margin-top: 0; gap: 0.5rem; }
+.tag-checkbox {
+    background: #0f1419;
+    border: 1px solid #2d3748;
+    border-radius: 999px;
+    padding: 0.15rem 0.6rem;
+}
+
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
 th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #2d3748; font-size: 0.88rem; }
 th { color: #a0aec0; font-weight: 500; }
@@ -80,6 +97,7 @@ th { color: #a0aec0; font-weight: 500; }
 }
 .badge-ok { background: #22543d; color: #9ae6b4; }
 .badge-warn { background: #744210; color: #fbd38d; }
+.badge-group { background: #2c5282; color: #bee3f8; margin-left: 0; }
 
 .btn {
     background: #2d3748;

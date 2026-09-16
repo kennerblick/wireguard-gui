@@ -17,7 +17,8 @@ welcher Peer wohin darf, statt der bisherigen Alles-oder-nichts-Regel.
 ## Zwei Ausfuehrungsmodi (`EXEC_MODE`)
 
 Alle iptables-Aenderungen laufen ueber die eine Funktion
-`run_on_target(script)` in `app/app.py`, die je nach `EXEC_MODE` dispatcht:
+`run_on_target(script)` in `app/wg_acl_manager/wireguard.py`, die je nach
+`EXEC_MODE` dispatcht:
 
 - **`ssh`** (Standard, urspruengliches Design): Container laeuft auf einer
   **separaten** Maschine (z.B. beim Admin), baut selbst einen WireGuard-
@@ -43,9 +44,11 @@ praktisch Pflicht (siehe README, Sicherheitshinweise).
 
 ## Stack
 
-- **Backend:** Python 3.12, Flask (kein ORM, rohes `sqlite3`)
+- **Backend:** Python 3.12, Flask (kein ORM, rohes `sqlite3`), als
+  Python-Package `wg_acl_manager` strukturiert (siehe unten)
 - **Frontend:** Server-seitig gerendertes Jinja2, kein JS-Framework, ein
-  eigenes CSS (`app/static/style.css`), bewusst minimalistisch gehalten
+  eigenes CSS (`app/wg_acl_manager/static/style.css`), bewusst
+  minimalistisch gehalten
 - **Deployment:** Ein einzelner Docker-Container, zwei Compose-Varianten
   (`docker-compose.yml` fuer `EXEC_MODE=ssh`, `docker-compose.local.yml`
   fuer `EXEC_MODE=local`)
@@ -55,43 +58,118 @@ praktisch Pflicht (siehe README, Sicherheitshinweise).
 
 ## Architektur in Kürze
 
+Seit der Grundoptimierung (Package-Umbau + Gruppen-ACLs) ist die Anwendung
+kein einzelnes 1568-Zeilen-Modul mehr, sondern ein Python-Package nach
+Zustaendigkeit. `app/app.py` ist nur noch ein duenner Shim
+(`from wg_acl_manager import create_app; app = create_app()`) - dadurch
+bleiben `waitress-serve app:app` und `python app.py` unveraendert
+aufrufbar, und Dockerfile/entrypoint.sh/docker-compose*.yml mussten fuer
+den Umbau nicht angefasst werden.
+
 ```
-app/app.py              - komplette Anwendungslogik (Routen, DB,
-                          run_on_target()=SSH- oder lokale Ausfuehrung,
-                          iptables-Script-Generierung, Basic-Auth, Validierung)
-app/templates/          - Jinja2-Templates (base, index=Dashboard, services,
-                          maintenance=verwaiste Chains + Firewall-Regeln,
-                          netzplan=Graph + Berechtigungsmatrix,
-                          provision=Client bereitstellen)
-app/static/style.css    - Styling
-tests/                  - pytest-Suite fuer Script-Generierung, Validierung,
-                          Hook-Erkennung (kein echter SSH-/WG-Zugriff noetig)
-.github/workflows/      - CI (pytest bei jedem Push)
-entrypoint.sh            - Container-Start: bei EXEC_MODE=ssh WG-Keypair +
-                          SSH-Keypair erzeugen (persistiert unter /data),
-                          wg0 hochfahren; bei EXEC_MODE=local direkt
-                          waitress starten. Immer: App per waitress starten
-Dockerfile              - Basis-Image + Systempakete (wireguard-tools,
-                          openssh-client, iptables) + Python-Deps
-docker-compose.yml      - Deployment-Definition fuer EXEC_MODE=ssh
-docker-compose.local.yml - Deployment-Definition fuer EXEC_MODE=local
-                          (network_mode: host, kein WG-Tunnel/SSH-Key)
-requirements-dev.txt    - zusaetzliche Dev-/Test-Abhaengigkeiten (pytest)
-.env.example            - Konfigurationsvorlage (beide Modi)
+app/app.py                       - duenner Shim (siehe oben), Entrypoint fuer waitress/python
+app/wg_acl_manager/
+  __init__.py                    - Flask-App-Singleton (`app = Flask(__name__)`),
+                                    create_app() (triggert reapply_all_on_startup()
+                                    bei EXEC_MODE=local)
+  config.py                      - alle os.environ.get(...)-Werte
+  db.py                          - get_db/close_db/init_db + run_migrations()
+                                    fuer additive Schema-Aenderungen an
+                                    bestehenden Datenbanken
+  auth.py                        - require_basic_auth (before_request)
+  wireguard.py                   - run_on_target(), fetch_wg_status(),
+                                    fetch_wg_peers_from_config(), peer_own_ip(),
+                                    peer_lookup_maps(), fetch_wg_interface_info()
+  firewall.py                    - detect_hook_chain(), check_ip_forward(),
+                                    chain_name(_to_ip)(), validate_dest_ip(),
+                                    build_apply_script()/build_remove_script(),
+                                    list_remote_wgacl_chains(),
+                                    parse_iptables_rules(), annotate_ips()
+  acl.py                         - apply_client(), log_apply(),
+                                    import_peers_from_config(), build_ip_label_map(),
+                                    get_all_ports_service_id(), diff_target_sets(),
+                                    build_netzplan_data(), resolve_rule_targets()
+                                    (Gruppen-Regel -> Mitglieder-IPs)
+  tags.py                        - Gruppen/Tags: CRUD, Client-Zuordnung,
+                                    Mitgliederauflösung (`tag_member_ips()`)
+  provisioning.py                - suggest_free_ip(), validate_wg_pubkey(),
+                                    Script-Templates, render_*_script(),
+                                    register_peer_on_target()
+  routes/
+    __init__.py                  - importiert alle Routen-Module (registriert
+                                    sie am App-Singleton)
+    dashboard.py, services.py, netzplan.py, maintenance.py, provisioning.py
+    tags.py                      - /tags Uebersicht + CRUD,
+                                    /clients/<id>/tags/set
+  templates/                     - Jinja2-Templates (base, index=Dashboard,
+                                    services, maintenance, netzplan, provision,
+                                    tags=Gruppenverwaltung) - liegen im Package,
+                                    Flask findet sie automatisch relativ dazu
+  static/style.css               - Styling
+tests/                            - pytest-Suite (Script-Generierung, Validierung,
+                                    Hook-Erkennung, Tags/Gruppen-Aufloesung;
+                                    kein echter SSH-/WG-Zugriff noetig)
+.github/workflows/                - CI (pytest bei jedem Push)
+entrypoint.sh                     - Container-Start: bei EXEC_MODE=ssh WG-Keypair +
+                                    SSH-Keypair erzeugen (persistiert unter /data),
+                                    wg0 hochfahren; bei EXEC_MODE=local direkt
+                                    waitress starten. Immer: App per waitress starten
+Dockerfile                       - Basis-Image + Systempakete (wireguard-tools,
+                                    openssh-client, iptables) + Python-Deps
+docker-compose.yml                - Deployment-Definition fuer EXEC_MODE=ssh
+docker-compose.local.yml          - Deployment-Definition fuer EXEC_MODE=local
+                                    (network_mode: host, kein WG-Tunnel/SSH-Key)
+requirements-dev.txt              - zusaetzliche Dev-/Test-Abhaengigkeiten (pytest)
+.env.example                      - Konfigurationsvorlage (beide Modi)
 ```
+
+**Testbarkeits-Konvention (wichtig bei jeder Aenderung):** Cross-Modul-Aufrufe
+erfolgen immer als `from . import wireguard` + `wireguard.run_on_target(...)`
+("modul-qualifizierter Zugriff"), NIEMALS als `from .wireguard import
+run_on_target` ("Direkt-Import des Namens"). Grund: Tests monkeypatchen
+Funktionen modulweit (`monkeypatch.setattr(wireguard, "run_on_target",
+...)`) - das wirkt nur, wenn der Aufrufer die Funktion bei jedem Aufruf
+frisch ueber das Modul-Objekt nachschlaegt, statt eine beim Import lokal
+gebundene Kopie des Namens zu benutzen. Ein Codebase-Audit
+(`grep -rn "^from \.\(config\|wireguard\|firewall\|acl\|tags\|provisioning\|db\)\+ import"`)
+sollte nach jeder neuen Datei wiederholt werden, um diesen Anti-Pattern
+auszuschliessen.
 
 **Datenmodell** (SQLite, `/data/db/wgacl.db`):
 - `clients` (wg_ip, label, restricted-Flag)
 - `services` (name, protocol, port; `is_builtin`-Flag schützt Standarddienste vor Löschung)
-- `rules` (client_id, dest_ip, service_id) - dest_ip="any" bedeutet kein Ziel-Filter
+- `tags` (name) - frei anlegbare Gruppen, z.B. `mikrotik`, `server`
+- `client_tags` (client_id, tag_id) - Many-to-Many, ein Client kann mehreren
+  Gruppen angehören
+- `rules` (client_id, dest_ip, dest_tag_id, service_id) - entweder `dest_ip`
+  (inkl. Sentinel `"any"` = kein Ziel-Filter) **oder** `dest_tag_id` ist
+  gesetzt, nie beides. Bei einer Gruppen-Regel steht in `dest_ip` der
+  Sentinel-Wert `""` (leerer String statt NULL, um die bestehende
+  `dest_ip TEXT NOT NULL`-Constraint nicht per riskantem Tabellen-Neubau
+  aendern zu muessen). `dest_tag_id` wird per additiver Migration
+  (`db.run_migrations()`, `ALTER TABLE ... ADD COLUMN`) auch in bereits
+  bestehenden Datenbanken ergänzt.
 - `apply_log` (Historie der SSH-Anwendungsversuche, Erfolg/Fehlertext)
 
-**Kernfunktion `build_apply_script()`** in `app/app.py`: generiert pro
-Client ein idempotentes Bash/iptables-Script (eigene Chain `WGACL_<ip>`,
-`ACCEPT`-Regeln pro `rules`-Eintrag, abschließendes `DROP`, Sprung-Regel im
-erkannten Hook-Punkt). `detect_hook_chain()` unterscheidet automatisch
-zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
-(direkt `FORWARD`).
+**Kernfunktion `build_apply_script()`** in `app/wg_acl_manager/firewall.py`:
+generiert pro Client ein idempotentes Bash/iptables-Script (eigene Chain
+`WGACL_<ip>`, `ACCEPT`-Regeln pro (aufgelöster) `rules`-Zeile,
+abschließendes `DROP`, Sprung-Regel im erkannten Hook-Punkt). Bekommt weiter
+ausschließlich flache `{dest_ip, protocol, port}`-Zeilen - von Gruppen weiß
+diese sicherheitskritische Funktion nichts, die Aufloesung passiert davor
+(siehe `resolve_rule_targets()`). `detect_hook_chain()` unterscheidet
+automatisch zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und
+ohne (direkt `FORWARD`).
+
+**Gruppen-Aufloesung `resolve_rule_targets(db, client_id, raw_rules)`**
+(`acl.py`): wird von `apply_client()` unmittelbar vor
+`build_apply_script()` aufgerufen. Regeln mit `dest_ip` werden unverändert
+durchgereicht; Regeln mit `dest_tag_id` werden durch je eine Zeile pro
+aktuellem Gruppenmitglied ersetzt (`tags.tag_member_ips()`), der eigene
+Client dabei ausgeschlossen (kann sich nicht selbst als Ziel bekommen).
+Leere Gruppe ergibt keine Zeile, kein Fehler. Gruppen-Mitgliedschaft wirkt
+sich - wie jede andere Aenderung - erst nach erneutem "Anwenden" für den
+jeweiligen Client aus.
 
 ## Bereits umgesetzt
 
@@ -212,6 +290,42 @@ zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und ohne
   `_env_with_legacy_fallback()` liest weiterhin die alten `ISURFER_*`-Namen,
   falls die neuen nicht gesetzt sind (mit Hinweis im Log) - bestehende
   `.env`-Dateien brechen dadurch nicht.
+- **Package-Umbau**: die vormals 1568-Zeilen-Datei `app/app.py` wurde in das
+  Package `wg_acl_manager/` aufgeteilt (siehe "Architektur in Kürze" oben) -
+  reine Restrukturierung ohne Verhaltensaenderung, belegt durch eine zu 100%
+  gruen bleibende Testsuite waehrend des Umbaus.
+- **Gruppen-basierte ACL-Regeln** (Tags): Clients koennen beliebigen,
+  frei anlegbaren Gruppen zugeordnet werden (`tags`/`client_tags`,
+  `tags.py`, Seite "Gruppen"); eine Regel kann statt einer einzelnen
+  Ziel-IP eine Gruppe referenzieren (`rules.dest_tag_id`, Sentinel
+  `dest_ip=""`) und wird beim Anwenden ueber `acl.resolve_rule_targets()`
+  zu den aktuellen Mitglieder-IPs aufgeloest (Regel-Ersteller selbst
+  ausgeschlossen, leere Gruppe ergibt keine Zeile). `build_apply_script()`
+  selbst bekommt weiterhin nur flache IP-Zeilen und weiss nichts von
+  Gruppen. Ermoeglicht Regeln wie "erlaube HTTPS-Zugriff auf alle
+  MikroTiks". Automatisches Tagging bei "Client bereitstellen" nach
+  gewaehlter Plattform (`config.PROVISION_PLATFORM_TAGS`).
+- **Verwaltete Netze pro Client** (LAN hinter einem Router, typischerweise
+  MikroTik): `client_networks`-Tabelle + `networks.py` speichern beliebige
+  CIDRs je Client. Regeln nutzen dafuer unveraendert `dest_ip` als CIDR
+  (funktioniert bereits seit Anbeginn); neu ist, dass diese Netze im
+  Regel-Formular als bekanntes Ziel vorgeschlagen werden (Datalist) und
+  serverseitig korrekt geroutet werden: `provisioning.register_peer_on_target()`
+  nimmt bei Neuanlage `extra_networks` zusaetzlich zur eigenen /32-Adresse in
+  die AllowedIPs auf, `wireguard.set_peer_allowed_ips()` aktualisiert die
+  AllowedIPs eines bereits bestehenden Peers nachtraeglich (live per `wg set`
+  UND persistent per gezieltem awk-Ersetzen der AllowedIPs-Zeile innerhalb
+  des passenden `[Peer]`-Blocks, andere Bloecke bleiben unberuehrt). Ohne
+  diese serverseitige AllowedIPs-Erweiterung wuerde der WireGuard-Server
+  Pakete an das Netz gar nicht erst zum Router routen, unabhaengig von den
+  ACL-Regeln dieser App. `acl.import_peers_from_config()` erkennt bereits
+  konfigurierte verwaltete Netze automatisch (AllowedIPs-Eintraege jenseits
+  der eigenen IP und ausserhalb des Mesh-Subnetzes, via
+  `wireguard.peer_managed_networks()`) und uebernimmt sie beim Import.
+  "Client bereitstellen" fragt sie fuer neue MikroTik-Clients direkt in
+  Schritt 1/2 ab und erzeugt zusaetzliche Firewall-Freigaben im generierten
+  RouterOS-Skript; nachtraeglich aenderbar ueber ein Textfeld in der
+  Client-Karte im Dashboard (`/clients/<id>/networks/set`).
 
 ## Noch nicht umgesetzt / bekannte Lücken
 
