@@ -31,8 +31,14 @@ services:
       - wg-acl-data:/data
       # network_mode: host teilt nur die Netzwerk-Namespaces, NICHT das
       # Dateisystem - ohne diesen Mount sieht der Container die Host-Config
-      # nicht und kann die Peer-Namen (Kommentare unter [Peer]) nicht lesen.
-      - /etc/wireguard:/etc/wireguard:ro
+      # nicht und kann weder die Peer-Namen (Kommentare unter [Peer]) lesen
+      # noch neue Peers/AllowedIPs-Aenderungen eintragen. Bewusst NICHT
+      # read-only: "Client bereitstellen" (provisioning.register_peer_on_target)
+      # haengt neue [Peer]-Bloecke an, und "Verwaltete Netze" pro Client
+      # (wireguard.set_peer_allowed_ips) schreibt die AllowedIPs-Zeile eines
+      # bestehenden Peers um - beides schlaegt mit "Read-only file system"
+      # fehl, wenn dieser Mount ":ro" traegt.
+      - /etc/wireguard:/etc/wireguard
 
 volumes:
   wg-acl-data:

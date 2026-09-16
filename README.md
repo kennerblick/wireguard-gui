@@ -134,9 +134,12 @@ WG-Server ein akzeptabler, deutlich einfacherer Trade-off - `ADMIN_USER`/
 Namespaces, **nicht** das Dateisystem. `iptables`/`wg show` funktionieren
 trotzdem (die wirken direkt auf den geteilten Netzwerk-Namespace), aber um
 die Peer-Namen aus `/etc/wireguard/<interface>.conf` zu lesen (siehe
-"Nutzung" unten), mountet `docker-compose.local.yml` `/etc/wireguard`
-read-only in den Container. Ohne diesen Mount zeigt die Namensspalte nur
-"-" an.
+"Nutzung" unten) und um neue Peers ("Client bereitstellen") bzw. deren
+AllowedIPs ("Verwaltete Netze" pro Client) dauerhaft in der Config
+einzutragen, mountet `docker-compose.local.yml` `/etc/wireguard`
+**beschreibbar** in den Container. Ohne diesen Mount zeigt die
+Namensspalte nur "-" an, und beide genannten Schreib-Features schlagen mit
+"Read-only file system" fehl.
 
 ### 1. Repo auf dem WG-Server klonen und konfigurieren
 
