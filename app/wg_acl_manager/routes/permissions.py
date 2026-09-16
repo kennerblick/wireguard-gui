@@ -125,6 +125,9 @@ def add_client():
     except ValueError:
         flash(f"Ungueltige Tunnel-IP: {wg_ip_raw!r}", "error")
         return redirect(url_for("permissions"))
+    if wg_ip == config.WG_SERVER_TUNNEL_IP:
+        flash(f"{wg_ip} ist die Tunnel-IP des WG-Servers selbst (WG_SERVER_TUNNEL_IP) - kein gueltiger Client.", "error")
+        return redirect(url_for("permissions"))
     try:
         db.execute(
             "INSERT INTO clients (wg_ip, label, restricted) VALUES (?, ?, ?)",
@@ -176,6 +179,9 @@ def set_client_wg_ip(client_id):
         new_ip = str(ipaddress.ip_address(raw))
     except ValueError:
         flash(f"Ungueltige Tunnel-IP: {raw!r}", "error")
+        return redirect(url_for("permissions"))
+    if new_ip == config.WG_SERVER_TUNNEL_IP:
+        flash(f"{new_ip} ist die Tunnel-IP des WG-Servers selbst (WG_SERVER_TUNNEL_IP) - kein gueltiger Client.", "error")
         return redirect(url_for("permissions"))
 
     old_ip = client["wg_ip"]
