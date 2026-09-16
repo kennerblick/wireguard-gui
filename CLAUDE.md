@@ -98,13 +98,20 @@ app/wg_acl_manager/
   routes/
     __init__.py                  - importiert alle Routen-Module (registriert
                                     sie am App-Singleton)
-    dashboard.py, services.py, netzplan.py, maintenance.py, provisioning.py
+    dashboard.py                 - nur noch /  (reiner Status-Ueberblick)
+    permissions.py                - /permissions: Client-CRUD, Regel-CRUD,
+                                    Peers importieren, Schnellzugriff "volle
+                                    Freigabe" (/permissions/full-access/set)
+    services.py, netzplan.py, maintenance.py, provisioning.py
     tags.py                      - /tags Uebersicht + CRUD,
-                                    /clients/<id>/tags/set
-  templates/                     - Jinja2-Templates (base, index=Dashboard,
+                                    /tags/<id>/members/set (Gruppen-Zuordnung,
+                                    ausschliesslich hier gepflegt)
+  templates/                     - Jinja2-Templates (base, index=Dashboard-
+                                    Status, permissions=Client-/Regelverwaltung,
                                     services, maintenance, netzplan, provision,
-                                    tags=Gruppenverwaltung) - liegen im Package,
-                                    Flask findet sie automatisch relativ dazu
+                                    tags=Gruppenverwaltung+-Zuordnung) - liegen
+                                    im Package, Flask findet sie automatisch
+                                    relativ dazu
   static/style.css               - Styling
 tests/                            - pytest-Suite (Script-Generierung, Validierung,
                                     Hook-Erkennung, Tags/Gruppen-Aufloesung;
@@ -226,20 +233,34 @@ jeweiligen Client aus.
   genau so einem Peer. Alle Stellen, die frueher `allowed_ips` selbst
   parsten (`peer_lookup_maps()`, `import_peers_from_config()`,
   `suggest_free_ip()`), nutzen jetzt einheitlich `peer_own_ip()`.
-- **Netzplan-Seite** (`/netzplan`): SVG-Graph (Knoten kreisförmig
-  angeordnet, `build_netzplan_data()`) zeigt erlaubte Verbindungen als
-  Linien; Hover zeigt die zusammengefassten erlaubten Dienste (reines
-  `<title>`-freies Tooltip per JS, kein zusätzliches JS-Framework).
-  Uneingeschränkte Clients werden nur farblich hervorgehoben (gelber
-  Rahmen), ohne Linien zu allen anderen Peers zu zeichnen. Darunter eine
-  Quick-Toggle-Matrix (`/netzplan/permissions/set`): Dropdown mit
-  eingeschränkten Clients links, Mehrfachauswahl aller bekannten Peers
-  rechts (Checkboxen, per JS aus eingebettetem JSON befüllt und je nach
-  gewähltem Client vorbelegt). Verwaltet ausschließlich Regeln mit dem
-  Dienst "Alle Ports" (`get_all_ports_service_id()`,
-  `diff_target_sets()`) - feinere, dienstspezifische Regeln bleiben davon
-  unberührt und werden weiter über die bestehende Rule-Formular im
-  Dashboard verwaltet.
+- **Netzplan-Seite** (`/netzplan`, rein lesend): SVG-Graph
+  (`build_netzplan_data()`) mit einem zentralen WG-Server-Knoten
+  (`config.WG_SERVER_TUNNEL_IP`), Clients auf einem aeusseren Ring
+  (kreisfoermig) und Gruppen-Pseudo-Knoten ("Gruppe: <Name>", Rauten-Form)
+  gebuendelt auf einem inneren Ring um den Server statt zwischen den Peers
+  verstreut. Gestrichelte, nicht-interaktive Kanten vom Server zu jedem
+  Client zeigen die reine Tunnel-Topologie; durchgezogene, hover-faehige
+  Kanten zeigen ACL-Erlaubnisse mit den zusammengefassten erlaubten
+  Diensten im Tooltip (reines `<title>`-freies Tooltip per JS, kein
+  zusätzliches JS-Framework). Uneingeschränkte Clients werden nur farblich
+  hervorgehoben (gelber Rahmen), ohne ACL-Linien zu allen anderen Peers zu
+  zeichnen. Die frühere Quick-Toggle-Matrix ist nach `/permissions`
+  umgezogen (siehe dort) - der Netzplan selbst verwaltet nichts mehr, rein
+  Visualisierung.
+- **Berechtigungen-Seite** (`/permissions`): Client-CRUD (hinzufuegen,
+  Peers importieren, Einschraenkung togglen, entfernen), Regel-CRUD pro
+  Client (Ziel-IP/CIDR/`any` **oder** Gruppe als Regel-Ziel, Dienst) sowie
+  die Schnellzugriff-Matrix fuer "volle Freigabe"
+  (`/permissions/full-access/set`, Dropdown mit eingeschränkten Clients
+  links, Mehrfachauswahl aller bekannten Peers rechts, Checkboxen per JS
+  aus eingebettetem JSON befüllt). Verwaltet ausschließlich Regeln mit dem
+  Dienst "Alle Ports" (`get_all_ports_service_id()`, `diff_target_sets()`)
+  - feinere, dienstspezifische Regeln bleiben davon unberührt. Das
+  frühere Dashboard ("Zugriffs-Matrix") ist komplett hierher umgezogen;
+  `/` zeigt seitdem nur noch den reinen WireGuard-Status. Gruppen-
+  **Zuordnung** (welcher Client zu welcher Gruppe gehoert) findet
+  ausschließlich auf der Gruppen-Seite statt (siehe unten) - hier wird
+  eine Gruppe nur noch als Regel-Ziel ausgewählt.
 - **Unit-Tests** (`tests/`, `pytest`) für Script-Generierung
   (`build_apply_script`/`build_remove_script`), Eingabevalidierung und
   Hook-Erkennung; CI via `.github/workflows/tests.yml`.
@@ -305,6 +326,14 @@ jeweiligen Client aus.
   Gruppen. Ermoeglicht Regeln wie "erlaube HTTPS-Zugriff auf alle
   MikroTiks". Automatisches Tagging bei "Client bereitstellen" nach
   gewaehlter Plattform (`config.PROVISION_PLATFORM_TAGS`).
+  **Mitglieder-Zuordnung ausschließlich auf der Gruppen-Seite**
+  (`tags.set_tag_members()`, `/tags/<id>/members/set`): pro Gruppe eine
+  Checkbox-Liste aller Clients, jede Aenderung wird per `onchange="this
+  .form.submit()"` sofort uebernommen - kein separater "Speichern"-Button.
+  Das Gegenstueck `tags.set_client_tags()` (komplette Tag-Liste eines
+  Clients ersetzen) bleibt als reine Modulfunktion bestehen und wird
+  weiterhin von `provisioning.py` fuer das automatische Platform-Tagging
+  genutzt, hat aber keine eigene Route/UI mehr.
 - **Verwaltete Netze pro Client** (LAN hinter einem Router, typischerweise
   MikroTik): `client_networks`-Tabelle + `networks.py` speichern beliebige
   CIDRs je Client. Regeln nutzen dafuer unveraendert `dest_ip` als CIDR
@@ -325,7 +354,7 @@ jeweiligen Client aus.
   "Client bereitstellen" fragt sie fuer neue MikroTik-Clients direkt in
   Schritt 1/2 ab und erzeugt zusaetzliche Firewall-Freigaben im generierten
   RouterOS-Skript; nachtraeglich aenderbar ueber ein Textfeld in der
-  Client-Karte im Dashboard (`/clients/<id>/networks/set`).
+  Client-Karte auf der Berechtigungen-Seite (`/clients/<id>/networks/set`).
 
 ## Noch nicht umgesetzt / bekannte Lücken
 

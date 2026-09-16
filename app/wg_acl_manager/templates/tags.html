@@ -6,40 +6,44 @@
     <p class="muted small">
         Gruppen fassen Clients zusammen, damit ACL-Regeln nicht IP fuer IP,
         sondern auf eine ganze Klasse von Peers zielen koennen - z.B.
-        "erlaube Zugriff auf alle MikroTiks". Ein Client kann mehreren
-        Gruppen angehoeren; die Zuordnung erfolgt auf dem Dashboard bei
-        jedem Client. Wird eine Gruppe geloescht, verschwinden auch Regeln,
-        die auf sie zielten - betroffene Clients danach erneut "anwenden".
+        "erlaube Zugriff auf alle MikroTiks". Mitglieder werden direkt hier
+        angehakt/abgehakt und sofort uebernommen. Wird eine Gruppe geloescht,
+        verschwinden auch Regeln, die auf sie zielten - betroffene Clients
+        danach erneut "anwenden" (siehe "Berechtigungen").
     </p>
+
     {% if not tags %}
     <p class="muted">Noch keine Gruppen angelegt.</p>
     {% else %}
-    <table class="rules-table">
-        <thead>
-            <tr><th>Name</th><th>Mitglieder</th><th></th></tr>
-        </thead>
-        <tbody>
-            {% for t in tags %}
-            <tr>
-                <td>{{ t.name }}</td>
-                <td class="small">
-                    {% set members = members_by_tag.get(t.id, []) %}
-                    {% if members %}
-                        {{ members | map(attribute="label") | join(", ") }}
-                    {% else %}
-                        <span class="muted">keine</span>
-                    {% endif %}
-                </td>
-                <td>
-                    <form method="post" action="{{ url_for('delete_tag', tag_id=t.id) }}"
-                          onsubmit="return confirm('Gruppe {{ t.name }} wirklich loeschen? Regeln, die darauf zielen, werden mit entfernt.');">
-                        <button type="submit" class="btn btn-tiny btn-danger">Loeschen</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+        {% for t in tags %}
+        <div class="tag-card">
+            <div class="tag-card-header">
+                <div>
+                    <strong>{{ t.name }}</strong>
+                    <span class="badge badge-group">{{ t.member_count }} Mitglied{{ "er" if t.member_count != 1 else "" }}</span>
+                </div>
+                <form method="post" action="{{ url_for('delete_tag', tag_id=t.id) }}"
+                      onsubmit="return confirm('Gruppe {{ t.name }} wirklich loeschen? Regeln, die darauf zielen, werden mit entfernt.');">
+                    <button type="submit" class="btn btn-tiny btn-danger">Loeschen</button>
+                </form>
+            </div>
+            {% if not all_clients %}
+            <p class="muted small">Noch keine Clients erfasst (siehe "Berechtigungen").</p>
+            {% else %}
+            <form method="post" action="{{ url_for('set_tag_members', tag_id=t.id) }}" class="tag-members">
+                {% set my_member_ids = member_ids_by_tag.get(t.id, []) %}
+                {% for c in all_clients %}
+                <label class="checkbox-label tag-member-checkbox">
+                    <input type="checkbox" name="client_ids" value="{{ c.id }}"
+                           {% if c.id in my_member_ids %}checked{% endif %}
+                           onchange="this.form.submit()">
+                    {{ c.label }} <span class="mono small">{{ c.wg_ip }}</span>
+                </label>
+                {% endfor %}
+            </form>
+            {% endif %}
+        </div>
+        {% endfor %}
     {% endif %}
 </section>
 

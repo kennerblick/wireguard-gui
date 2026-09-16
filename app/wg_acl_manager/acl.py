@@ -8,7 +8,7 @@ import datetime
 import ipaddress
 import math
 
-from . import firewall, networks, tags, wireguard
+from . import config, firewall, networks, tags, wireguard
 
 
 def log_apply(db, client_id, success, output):
@@ -160,18 +160,24 @@ def diff_target_sets(existing: set, desired: set):
 
 
 def build_netzplan_data(db):
-    """Baut Knoten (Peers) und Kanten (Regeln) fuer den Netzplan.
+    """Baut Knoten (WG-Server, Peers, Gruppen) und Kanten (Regeln) fuer den
+    Netzplan.
 
-    Knoten: alle erfassten Clients + alle Ziel-IPs aus IP-Regeln + ein
-    Pseudo-Knoten je referenziertem Tag ("Gruppe: <Name>") + ggf. "Internet /
-    alle Ziele" fuer dest_ip == "any" - kreisfoermig angeordnet. Kanten: eine
-    je (Quelle, Ziel)-Paar, mit allen dafuer erlaubten Diensten
-    zusammengefasst (fuer den Hover-Tooltip). Gruppen-Regeln zeigen auf den
-    Gruppen-Pseudo-Knoten statt auf jedes einzelne Mitglied - haelt den
-    Graphen lesbar und aktuell (Mitgliedschaft kann sich unabhaengig von der
-    Regel aendern). Fuer uneingeschraenkte Clients werden keine Kanten
-    gezeichnet (sie duerfen ohnehin ueberallhin) - sie werden stattdessen
-    optisch hervorgehoben.
+    Knoten: ein zentraler WG-Server-Knoten (der Tunnel-Endpunkt, ueber den
+    aller Peer-zu-Peer-Verkehr laeuft) + alle erfassten Clients + alle
+    Ziel-IPs aus IP-Regeln + ggf. "Internet / alle Ziele" fuer dest_ip ==
+    "any" auf einem aeusseren Ring, sowie ein Pseudo-Knoten je referenziertem
+    Tag ("Gruppe: <Name>") gebuendelt auf einem inneren Ring um den Server -
+    das haelt Gruppen visuell zusammen statt sie zwischen den Peers verstreut
+    darzustellen. Kanten: eine gestrichelte Tunnel-Kante vom Server zu jedem
+    Client (reine Topologie, kein Hover-Text) plus eine ACL-Kante je (Quelle,
+    Ziel)-Regel-Paar, mit allen dafuer erlaubten Diensten zusammengefasst
+    (fuer den Hover-Tooltip). Gruppen-Regeln zeigen auf den Gruppen-Pseudo-
+    Knoten statt auf jedes einzelne Mitglied - haelt den Graphen lesbar und
+    aktuell (Mitgliedschaft kann sich unabhaengig von der Regel aendern).
+    Fuer uneingeschraenkte Clients werden keine ACL-Kanten gezeichnet (sie
+    duerfen ohnehin ueberallhin) - sie werden stattdessen optisch
+    hervorgehoben.
     """
     clients = db.execute("SELECT * FROM clients ORDER BY wg_ip").fetchall()
     rules = db.execute(
@@ -193,8 +199,9 @@ def build_netzplan_data(db):
             return client_by_ip[ip]["label"]
         return ip_to_name.get(ip, ip)
 
-    ordered_ips = [c["wg_ip"] for c in clients]
-    seen_ips = set(ordered_ips)
+    ring_ips = [c["wg_ip"] for c in clients]
+    seen_ips = set(ring_ips)
+    group_keys = []
     pseudo_labels = {}
     show_internet_node = False
     edge_map = {}
@@ -202,34 +209,53 @@ def build_netzplan_data(db):
         if r["dest_tag_id"] is not None:
             dest_key = f"__tag_{r['dest_tag_id']}__"
             pseudo_labels[dest_key] = f"Gruppe: {r['tag_name']}"
+            if dest_key not in seen_ips:
+                seen_ips.add(dest_key)
+                group_keys.append(dest_key)
         elif r["dest_ip"] == "any":
             show_internet_node = True
             dest_key = "__any__"
+            if dest_key not in seen_ips:
+                seen_ips.add(dest_key)
+                ring_ips.append(dest_key)
         else:
             dest_key = r["dest_ip"]
-        if dest_key not in seen_ips:
-            seen_ips.add(dest_key)
-            ordered_ips.append(dest_key)
+            if dest_key not in seen_ips:
+                seen_ips.add(dest_key)
+                ring_ips.append(dest_key)
         edge_map.setdefault((r["src_ip"], dest_key), []).append(r["service_name"])
 
     if show_internet_node and "__any__" not in seen_ips:
-        ordered_ips.append("__any__")
+        ring_ips.append("__any__")
+        seen_ips.add("__any__")
 
-    n = len(ordered_ips)
-    cx, cy, radius = 320, 300, 235
+    cx, cy = 320, 300
+    outer_radius = 235
+    group_radius = 120
     positions = {}
     nodes = []
-    for i, ip in enumerate(ordered_ips):
-        angle = (2 * math.pi * i / n) - (math.pi / 2) if n else 0
-        x = cx + radius * math.cos(angle)
-        y = cy + radius * math.sin(angle)
+
+    server_key = "__server__"
+    server_label = f"WG-Server ({config.WG_SERVER_TUNNEL_IP})"
+    positions[server_key] = (cx, cy)
+    nodes.append({
+        "ip": server_key,
+        "x": cx,
+        "y": cy,
+        "label": server_label,
+        "unrestricted": False,
+        "is_client": False,
+        "is_group": False,
+        "is_server": True,
+    })
+
+    n_outer = len(ring_ips)
+    for i, ip in enumerate(ring_ips):
+        angle = (2 * math.pi * i / n_outer) - (math.pi / 2) if n_outer else 0
+        x = cx + outer_radius * math.cos(angle)
+        y = cy + outer_radius * math.sin(angle)
         client = client_by_ip.get(ip)
-        if ip == "__any__":
-            label = "Internet / alle Ziele"
-        elif ip in pseudo_labels:
-            label = pseudo_labels[ip]
-        else:
-            label = label_for(ip)
+        label = "Internet / alle Ziele" if ip == "__any__" else label_for(ip)
         positions[ip] = (x, y)
         nodes.append({
             "ip": ip,
@@ -238,10 +264,42 @@ def build_netzplan_data(db):
             "label": label,
             "unrestricted": bool(client and not client["restricted"]),
             "is_client": ip in client_by_ip,
-            "is_group": ip in pseudo_labels,
+            "is_group": False,
+            "is_server": False,
+        })
+
+    n_group = len(group_keys)
+    for i, key in enumerate(group_keys):
+        angle = (2 * math.pi * i / n_group) - (math.pi / 2) if n_group else 0
+        x = cx + group_radius * math.cos(angle)
+        y = cy + group_radius * math.sin(angle)
+        positions[key] = (x, y)
+        nodes.append({
+            "ip": key,
+            "x": round(x, 1),
+            "y": round(y, 1),
+            "label": pseudo_labels[key],
+            "unrestricted": False,
+            "is_client": False,
+            "is_group": True,
+            "is_server": False,
         })
 
     edges = []
+    for c in clients:
+        if c["wg_ip"] not in positions:
+            continue
+        x1, y1 = positions[server_key]
+        x2, y2 = positions[c["wg_ip"]]
+        edges.append({
+            "x1": round(x1, 1), "y1": round(y1, 1),
+            "x2": round(x2, 1), "y2": round(y2, 1),
+            "src_label": server_label,
+            "dest_label": c["label"],
+            "services": "VPN-Tunnel",
+            "kind": "tunnel",
+        })
+
     for (src_ip, dest_key), services in edge_map.items():
         if src_ip not in positions or dest_key not in positions:
             continue
@@ -259,6 +317,7 @@ def build_netzplan_data(db):
             "src_label": label_for(src_ip),
             "dest_label": dest_label,
             "services": ", ".join(sorted(set(services))),
+            "kind": "acl",
         })
 
     return nodes, edges

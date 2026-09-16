@@ -61,6 +61,25 @@ def set_client_tags(db, client_id: int, tag_ids: set):
     db.commit()
 
 
+def get_tag_member_ids(db, tag_id: int) -> set:
+    rows = db.execute("SELECT client_id FROM client_tags WHERE tag_id = ?", (tag_id,)).fetchall()
+    return {row["client_id"] for row in rows}
+
+
+def set_tag_members(db, tag_id: int, client_ids: set):
+    """Ersetzt die komplette Mitgliederliste einer Gruppe durch client_ids -
+    das Gegenstueck zu set_client_tags(), fuer die Zuordnung im Gruppen-
+    Dialog (dort wird je Gruppe die Mitgliederliste bearbeitet, nicht je
+    Client die Gruppenliste)."""
+    db.execute("DELETE FROM client_tags WHERE tag_id = ?", (tag_id,))
+    for client_id in client_ids:
+        db.execute(
+            "INSERT OR IGNORE INTO client_tags (client_id, tag_id) VALUES (?, ?)",
+            (client_id, tag_id),
+        )
+    db.commit()
+
+
 def tag_member_ips(db, tag_id: int, exclude_client_id=None):
     """Tunnel-IPs aller Clients mit diesem Tag (ohne den angegebenen Client)."""
     query = """

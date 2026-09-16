@@ -40,14 +40,15 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 2rem 4rem; }
 
 .panel-header { display: flex; justify-content: space-between; align-items: center; }
 
-.client-card {
+.perm-card {
     border: 1px solid #2d3748;
+    border-left: 3px solid #2b6cb0;
     border-radius: 6px;
     padding: 1rem;
     margin-bottom: 1rem;
     background: #141b28;
 }
-.client-card-header {
+.perm-card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -55,12 +56,13 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 2rem 4rem; }
     gap: 0.5rem;
     margin-bottom: 0.75rem;
 }
-.client-unrestricted { border-color: #744210; }
+.perm-card-title { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
+.perm-card-unrestricted { border-left-color: #744210; }
 
-.client-actions { display: flex; gap: 0.5rem; }
-.client-actions form { display: inline; }
+.perm-card-actions { display: flex; gap: 0.5rem; }
+.perm-card-actions form { display: inline; }
 
-.client-tags-row {
+.perm-card-networks {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -69,12 +71,52 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 2rem 4rem; }
     padding-bottom: 0.5rem;
     border-bottom: 1px dashed #2d3748;
 }
-.client-tags-form { margin-top: 0; gap: 0.5rem; }
-.tag-checkbox {
+
+.perm-rules-table { table-layout: fixed; }
+.rule-add-row td {
+    background: #0f1419;
+    border-bottom: none;
+    padding-top: 0.6rem;
+}
+.rule-add-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.rule-add-form input[type="text"],
+.rule-add-form select {
+    background: #141b28;
+    border: 1px solid #4a5568;
+    border-radius: 5px;
+    padding: 0.35rem 0.55rem;
+    color: #e2e8f0;
+    font-size: 0.82rem;
+}
+
+.tag-card {
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    background: #141b28;
+}
+.tag-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+.tag-members {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.tag-member-checkbox {
     background: #0f1419;
     border: 1px solid #2d3748;
     border-radius: 999px;
-    padding: 0.15rem 0.6rem;
+    padding: 0.2rem 0.7rem;
 }
 
 table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
@@ -175,6 +217,17 @@ th { color: #a0aec0; font-weight: 500; }
     stroke: #63b3ed;
     stroke-width: 3;
 }
+.netzplan-svg .edge-tunnel {
+    stroke: #4a5568;
+    stroke-width: 1;
+    stroke-dasharray: 4 4;
+    cursor: default;
+    opacity: 0.6;
+}
+.netzplan-svg .edge-tunnel:hover {
+    stroke: #4a5568;
+    stroke-width: 1;
+}
 .netzplan-svg .node circle {
     fill: #2b6cb0;
     stroke: #1a2332;
@@ -185,9 +238,23 @@ th { color: #a0aec0; font-weight: 500; }
     stroke: #fbd38d;
     stroke-width: 2;
 }
+.netzplan-svg .node-server circle {
+    fill: #285e61;
+    stroke: #4fd1c5;
+    stroke-width: 2;
+}
+.netzplan-svg .node-group rect {
+    fill: #44337a;
+    stroke: #b794f4;
+    stroke-width: 2;
+}
 .netzplan-svg .node text {
     fill: #cbd5e0;
     font-size: 11px;
+}
+.netzplan-svg .node-server text {
+    fill: #81e6d9;
+    font-weight: 600;
 }
 .netzplan-tooltip {
     position: fixed;
@@ -201,6 +268,27 @@ th { color: #a0aec0; font-weight: 500; }
     pointer-events: none;
     max-width: 280px;
 }
+
+.netzplan-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: #a0aec0;
+}
+.legend-item { display: flex; align-items: center; gap: 0.35rem; }
+.legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+}
+.legend-server { background: #285e61; border: 2px solid #4fd1c5; border-radius: 50%; }
+.legend-client { background: #2b6cb0; border-radius: 50%; }
+.legend-group { background: #44337a; border: 2px solid #b794f4; transform: rotate(45deg); }
+.legend-unrestricted { background: #744210; border: 2px solid #fbd38d; border-radius: 50%; }
 
 .permissions-columns {
     display: flex;

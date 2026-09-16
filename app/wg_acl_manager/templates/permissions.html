@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="panel">
+    <div class="panel-header">
+        <h2>Berechtigungen</h2>
+        <form method="post" action="{{ url_for('apply_all') }}">
+            <button type="submit" class="btn btn-primary">Alle anwenden</button>
+        </form>
+    </div>
+    <p class="muted small">
+        Wer darf wohin - pro Client eine Karte mit den aktuell erlaubten
+        Zielen. Gruppen-Zuordnung (welcher Client zu welcher Gruppe gehoert)
+        wird unter "Gruppen" gepflegt; hier waehlst du eine Gruppe nur noch
+        als Regel-Ziel aus.
+    </p>
+
+    {% for client in clients %}
+    <div class="perm-card {% if not client.restricted %}perm-card-unrestricted{% endif %}">
+        <div class="perm-card-header">
+            <div class="perm-card-title">
+                <strong>{{ client.label }}</strong>
+                <span class="mono">{{ client.wg_ip }}</span>
+                {% if not client.restricted %}
+                    <span class="badge badge-warn">Uneingeschraenkt (volles Mesh)</span>
+                {% else %}
+                    <span class="badge badge-ok">Eingeschraenkt</span>
+                {% endif %}
+                {% for name in client_tag_names.get(client.id, []) %}
+                    <span class="badge badge-group">{{ name }}</span>
+                {% endfor %}
+            </div>
+            <div class="perm-card-actions">
+                <form method="post" action="{{ url_for('toggle_client', client_id=client.id) }}">
+                    <button type="submit" class="btn btn-small">
+                        {{ "Einschraenkung deaktivieren" if client.restricted else "Einschraenkung aktivieren" }}
+                    </button>
+                </form>
+                <form method="post" action="{{ url_for('apply_single', client_id=client.id) }}">
+                    <button type="submit" class="btn btn-small btn-primary">Anwenden</button>
+                </form>
+                <form method="post" action="{{ url_for('delete_client', client_id=client.id) }}"
+                      onsubmit="return confirm('Client {{ client.label }} wirklich entfernen? Firewall-Regeln werden zurueckgebaut.');">
+                    <button type="submit" class="btn btn-small btn-danger">Entfernen</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="perm-card-networks">
+            <span class="muted small">Verwaltete Netze (LAN hinter diesem Client, z.B. MikroTik):</span>
+            <form method="post" action="{{ url_for('set_client_networks', client_id=client.id) }}" class="inline-form">
+                <input type="text" name="networks" class="mono"
+                       value="{{ client_networks.get(client.id, []) | map(attribute='cidr') | join(', ') }}"
+                       placeholder="z.B. 192.168.88.0/24, 192.168.5.0/24">
+                <button type="submit" class="btn btn-tiny">Speichern</button>
+            </form>
+        </div>
+
+        {% if client.restricted %}
+        <table class="rules-table perm-rules-table">
+            <thead>
+                <tr><th>Ziel</th><th>Dienst</th><th>Protokoll / Port</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for rule in rules_by_client.get(client.id, []) %}
+                <tr>
+                    <td class="mono">
+                        {% if rule.dest_tag_id %}
+                            <span class="badge badge-group">Gruppe: {{ rule.tag_name }}</span>
+                        {% else %}
+                            {{ rule.dest_ip }}
+                        {% endif %}
+                    </td>
+                    <td>{{ rule.service_name }}</td>
+                    <td class="mono small">
+                        {% if rule.port %}{{ rule.protocol }}/{{ rule.port }}{% else %}alle{% endif %}
+                    </td>
+                    <td>
+                        <form method="post" action="{{ url_for('delete_rule', rule_id=rule.id) }}">
+                            <button type="submit" class="btn btn-tiny btn-danger" title="Regel entfernen">&times;</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="empty-row">Keine Regeln - Client kann aktuell nirgendwo hin (nur DROP).</td></tr>
+                {% endfor %}
+                <tr class="rule-add-row">
+                    <td colspan="4">
+                        <form method="post" action="{{ url_for('add_rule') }}" class="rule-add-form">
+                            <input type="hidden" name="client_id" value="{{ client.id }}">
+                            <input type="text" name="dest_ip" class="mono" placeholder="Ziel-IP / CIDR / 'any'" list="known-destinations">
+                            <span class="muted small">oder</span>
+                            <select name="dest_tag_id">
+                                <option value="">— Gruppe waehlen —</option>
+                                {% for t in all_tags %}
+                                <option value="{{ t.id }}">Gruppe: {{ t.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <select name="service_id" required>
+                                {% for s in services_flat %}
+                                <option value="{{ s.id }}">{{ s.name }}{% if s.port %} ({{ s.protocol }}/{{ s.port }}){% endif %}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn btn-small btn-primary">+ Regel</button>
+                        </form>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <p class="muted small">
+            Ziel entweder als IP/CIDR (bzw. "any") ODER als Gruppe - nicht
+            beides. Bei einer Gruppe gilt die Regel fuer alle aktuellen
+            Mitglieder (Zuordnung unter "Gruppen"); Aenderungen wirken sich
+            erst nach erneutem "Anwenden" aus.
+        </p>
+        {% else %}
+        <p class="muted">Dieser Client ist nicht eingeschraenkt und nutzt die normale Mesh-Regel (Zugriff auf alle Peers).</p>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="muted">Noch keine Clients erfasst.</p>
+    {% endfor %}
+
+    <datalist id="known-destinations">
+        <option value="any">
+        {% for ip, label in known_destinations %}
+        <option value="{{ ip }}">{{ label }}</option>
+        {% endfor %}
+        {% for cidr, label in known_networks %}
+        <option value="{{ cidr }}">{{ label }}</option>
+        {% endfor %}
+    </datalist>
+</section>
+
+{% if restricted_clients %}
+<section class="panel">
+    <h2>Schnellzugriff: volle Freigabe</h2>
+    <p class="muted small">
+        Schaltet vollen Zugriff (Dienst "Alle Ports") von einem Peer zu
+        beliebigen Zielen um, ohne einzelne Regeln zu klicken. Feingranulare
+        Regeln bleiben davon unberuehrt und lassen sich weiterhin oben pro
+        Client verwalten.
+    </p>
+    <form method="post" action="{{ url_for('set_full_access_targets') }}" id="permissions-form">
+        <div class="permissions-columns">
+            <div class="permissions-source">
+                <label for="source-client">Peer (Quelle)</label>
+                <select id="source-client" name="client_id">
+                    {% for c in restricted_clients %}
+                    <option value="{{ c.id }}">{{ c.label }} ({{ c.wg_ip }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="permissions-targets">
+                <span class="targets-label">Darf zugreifen auf:</span>
+                <div id="targets-list" class="targets-list"></div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Berechtigungen speichern</button>
+    </form>
+</section>
+
+<script>
+(function () {
+    "use strict";
+    var sourceSelect = document.getElementById("source-client");
+    var targetsList = document.getElementById("targets-list");
+    if (sourceSelect && targetsList) {
+        var allClients = {{ all_clients_json | safe }};
+        var allTargets = {{ all_targets_json | safe }};
+        var clientTargets = {{ full_access_targets_json | safe }};
+
+        function renderTargets() {
+            var selectedId = sourceSelect.value;
+            var client = allClients.filter(function (c) { return String(c.id) === selectedId; })[0];
+            var checked = {};
+            (clientTargets[selectedId] || []).forEach(function (ip) { checked[ip] = true; });
+
+            targetsList.innerHTML = "";
+            allTargets.forEach(function (t) {
+                if (client && t.ip === client.wg_ip) {
+                    return;
+                }
+                var label = document.createElement("label");
+                label.className = "checkbox-label target-checkbox";
+                var cb = document.createElement("input");
+                cb.type = "checkbox";
+                cb.name = "targets";
+                cb.value = t.ip;
+                cb.checked = !!checked[t.ip];
+                label.appendChild(cb);
+                label.appendChild(document.createTextNode(" " + t.label + " (" + t.ip + ")"));
+                targetsList.appendChild(label);
+            });
+        }
+
+        sourceSelect.addEventListener("change", renderTargets);
+        renderTargets();
+    }
+})();
+</script>
+{% endif %}
+
+<section class="panel">
+    <h2>Neuen Client hinzufuegen</h2>
+    <form method="post" action="{{ url_for('add_client') }}" class="inline-form">
+        <input type="text" name="wg_ip" placeholder="WG-Tunnel-IP, z.B. 10.250.0.210" required>
+        <input type="text" name="label" placeholder="Bezeichnung, z.B. Mitarbeiter Max" required>
+        <label class="checkbox-label"><input type="checkbox" name="restricted" checked> Eingeschraenkt</label>
+        <button type="submit" class="btn btn-primary">Hinzufuegen</button>
+    </form>
+    <p class="muted small">
+        Hinweis: Der Client muss bereits als WireGuard-Peer auf dem Zielserver
+        eingetragen sein - siehe "Client bereitstellen" fuer einen komplett
+        neuen Peer, oder "Peers importieren" unten, um bereits vorhandene
+        Peers zu erfassen. Diese App verwaltet nur die Firewall-Regeln, nicht
+        die WireGuard-Peers selbst (Ausnahme: "Client bereitstellen"
+        registriert einen neuen Peer zusaetzlich auf dem Server).
+    </p>
+</section>
+
+<section class="panel">
+    <h2>Peers aus WireGuard-Config importieren</h2>
+    <p class="muted small">
+        Liest <code>/etc/wireguard/{{ wg_interface }}.conf</code> auf dem
+        Zielserver und legt für alle Peers, die dort schon als WireGuard-Peer
+        existieren, aber noch keinen Client-Datensatz in dieser App haben,
+        einen neuen Eintrag an (eingeschränkt, ohne Regeln - wie beim
+        manuellen Hinzufügen oben). Ändert nichts an der Firewall. Prüfe vor
+        dem "Anwenden" für einen importierten Client die tatsächlichen
+        Zugriffsrechte unter "Wartung" &rarr; "Firewall-Regeln (Ist-Zustand)".
+    </p>
+    <form method="post" action="{{ url_for('import_peers') }}">
+        <button type="submit" class="btn">Peers importieren</button>
+    </form>
+</section>
+
+{% endblock %}
