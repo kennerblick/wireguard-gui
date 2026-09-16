@@ -57,6 +57,15 @@ def permissions():
     for ip, name in ip_to_name.items():
         target_by_ip.setdefault(ip, name)
     all_targets = [{"ip": ip, "label": label} for ip, label in sorted(target_by_ip.items(), key=lambda kv: kv[1])]
+    # Verwaltete Netze (LAN hinter einem Client, z.B. MikroTik) sind ebenfalls
+    # gueltige Ziele fuer die Schnellzugriff-Matrix, nicht nur einzelne Peers -
+    # sonst waere "voller Zugriff auf das LAN hinter Router X" dort ueberhaupt
+    # nicht waehlbar, nur muehsam per CIDR im Regel-Formular jedes Clients.
+    all_targets.extend(
+        {"ip": row["cidr"], "label": f"LAN hinter {row['client_label']} ({row['cidr']})"}
+        for row in networks.all_networks_with_client(db)
+    )
+    all_targets.sort(key=lambda t: t["label"])
 
     all_ports_service_id = acl.get_all_ports_service_id(db)
     full_access_targets = {}
