@@ -57,6 +57,40 @@ def check_ip_forward():
     return out.strip() == "1"
 
 
+def _ensure_established_related_rule_line(hook_chain: str, iface: str) -> str:
+    """Stellt sicher, dass Rueckantworten auf bereits erlaubte Verbindungen
+    unabhaengig von der (potenziell restriktiven) Chain des ANTWORTENDEN
+    Peers durchgelassen werden.
+
+    Ohne diese Regel filtert jede Peer-Chain ausschliesslich nach Quelle: eine
+    Regel "A darf zu B" erlaubt zwar das erste Paket A->B, nicht aber automatisch
+    die Antwort B->A (z.B. eine Ping-Antwort oder ein TCP-SYN-ACK) - die laeuft
+    durch B's EIGENE Chain, gefiltert nach B's eigenen (moeglicherweise leeren)
+    Regeln, und wuerde dort im finalen DROP landen. Ohne diese Regel muesste
+    man fuer jedes kommunizierende Peer-Paar zwingend BEIDE Richtungen einzeln
+    konfigurieren, nur damit Antworten ueberhaupt zurueckkommen (in Produktion
+    aufgetreten: ein Client mit "erlaube Zugriff auf X" konnte X zwar erreichen,
+    bekam aber nie eine Antwort, weil X selbst keine Regel zurueck hatte).
+
+    Eine einmalige, auf wg-zu-wg-Forwarding beschraenkte (-i/-o {iface}, ruehrt
+    keinen anderen Forwarding-Traffic auf dem Host an) ESTABLISHED,RELATED-
+    Accept-Regel ganz oben in der Hook-Chain (Position 1) loest das: eine
+    bereits ueber eine explizite Regel erlaubte Verbindung darf antworten, ohne
+    dass der antwortende Peer selbst eine (redundante) Spiegel-Regel braucht.
+    Eine NEUE, vom antwortenden Peer selbst ausgehende Verbindung braucht
+    weiterhin eine eigene, explizite Regel - das hier lockert nur Rueckantworten
+    auf bereits vom initiierenden Client erlaubte Verbindungen, nicht mehr.
+    Muss vor der eigenen Sprung-Regel des Clients installiert werden (siehe
+    Aufrufer), die deshalb explizit auf Position 2 eingefuegt wird - sonst
+    wuerde ein spaeterer bare `-I {hook_chain}`-Aufruf fuer einen anderen
+    Client diese Regel wieder von Position 1 verdraengen.
+    """
+    return (
+        f'iptables -C {hook_chain} -i {iface} -o {iface} -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null '
+        f'|| iptables -I {hook_chain} 1 -i {iface} -o {iface} -m state --state ESTABLISHED,RELATED -j ACCEPT'
+    )
+
+
 def build_apply_script(client_ip: str, rules: list, hook_chain: str) -> str:
     """Baut das idempotente iptables-Script fuer einen einzelnen Client.
 
@@ -84,9 +118,10 @@ def build_apply_script(client_ip: str, rules: list, hook_chain: str) -> str:
         lines.append(f'iptables -A {chain} {dest_part}{proto_part}-j ACCEPT'.replace("  ", " "))
 
     lines.append(f'iptables -A {chain} -j DROP')
+    lines.append(_ensure_established_related_rule_line(hook_chain, iface))
     lines.append(
         f'iptables -C {hook_chain} -i {iface} -o {iface} -s {client_ip} -j {chain} 2>/dev/null '
-        f'|| iptables -I {hook_chain} -i {iface} -o {iface} -s {client_ip} -j {chain}'
+        f'|| iptables -I {hook_chain} 2 -i {iface} -o {iface} -s {client_ip} -j {chain}'
     )
     lines.append(
         'command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save '

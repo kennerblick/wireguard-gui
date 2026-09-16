@@ -59,6 +59,20 @@ def test_build_apply_script_all_protocol_has_no_port_filter():
     assert "iptables -A WGACL_10_250_0_210 -d 10.250.0.1 -j ACCEPT" in script
 
 
+def test_build_apply_script_ensures_established_related_return_rule():
+    rules = [{"dest_ip": "10.250.0.12", "protocol": "tcp", "port": 22}]
+    script = build_apply_script("10.250.0.210", rules, "DOCKER-USER")
+
+    assert "-m state --state ESTABLISHED,RELATED -j ACCEPT" in script
+    # Muss auf Position 1 stehen (vor jeder Peer-Chain), die eigene
+    # Sprungregel des Clients dagegen explizit erst auf Position 2 - sonst
+    # wuerde ein spaeterer Client mit einem bare "-I hook_chain" die
+    # Established-Regel wieder von Position 1 verdraengen.
+    assert "iptables -I DOCKER-USER 1 -i" in script
+    assert "iptables -I DOCKER-USER 2 -i" in script
+    assert script.index("iptables -I DOCKER-USER 1") < script.index("iptables -I DOCKER-USER 2")
+
+
 def test_build_remove_script_flushes_and_deletes_chain():
     script = build_remove_script("10.250.0.210", "DOCKER-USER")
     chain = "WGACL_10_250_0_210"

@@ -168,6 +168,26 @@ diese sicherheitskritische Funktion nichts, die Aufloesung passiert davor
 automatisch zwischen Servern mit Docker (`DOCKER-USER`-Chain vorhanden) und
 ohne (direkt `FORWARD`).
 
+**Rueckweg-Traffic (`_ensure_established_related_rule_line()`):** Jede
+Peer-Chain filtert ausschliesslich nach Quelle (`-s <client_ip>`). Eine
+Regel "A darf zu B" erlaubt zwar das erste Paket A->B, NICHT automatisch die
+Antwort B->A (z.B. Ping-Reply oder TCP-SYN-ACK/Daten) - die laeuft durch B's
+EIGENE Chain und wuerde dort in B's eigenem, moeglicherweise leerem
+Regelwerk im finalen `DROP` landen (in Produktion aufgetreten: Client A
+konnte Ziel B zwar erreichen, bekam aber nie eine Antwort, weil B selbst
+keine Regel zurueck zu A hatte). `build_apply_script()` stellt deshalb bei
+jedem `apply_client()` idempotent eine einmalige, auf `-i/-o
+{TARGET_WG_INTERFACE}` beschraenkte (kein anderer Forwarding-Traffic am Host
+betroffen) `-m state --state ESTABLISHED,RELATED -j ACCEPT`-Regel sicher,
+IMMER auf Position 1 der Hook-Chain (`iptables -I {hook_chain} 1 ...`) - vor
+jeder Peer-Chain. Die eigene Sprung-Regel des Clients wird deshalb bewusst
+auf Position 2 eingefuegt (`iptables -I {hook_chain} 2 ...`, nicht mehr
+bare `-I {hook_chain}` wie zuvor) - sonst wuerde ein spaeter angewendeter
+anderer Client die Established-Regel von Position 1 verdraengen. Wichtig:
+das lockert nur Antworten auf eine bereits vom initiierenden Client erlaubte
+Verbindung - eine NEUE, vom vormals antwortenden Peer selbst ausgehende
+Verbindung braucht weiterhin eine eigene, explizite Regel.
+
 **Gruppen-Aufloesung `resolve_rule_targets(db, client_id, raw_rules)`**
 (`acl.py`): wird von `apply_client()` unmittelbar vor
 `build_apply_script()` aufgerufen. Regeln mit `dest_ip` werden unverändert
