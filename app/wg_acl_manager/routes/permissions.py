@@ -195,13 +195,32 @@ def toggle_client(client_id):
 
 @app.route("/clients/<int:client_id>/wg_ip/set", methods=["POST"])
 def set_client_wg_ip(client_id):
-    """Korrigiert die gespeicherte Tunnel-IP eines Clients nachtraeglich -
-    z.B. wenn "Peers importieren" vor der Ambiguitaets-Erkennung (siehe
-    wireguard.peer_own_ip()) faelschlich eine Netzwerk-Adresse statt der
-    echten Peer-IP uebernommen hatte. Baut die Firewall-Chain unter der
-    alten IP zurueck und unter der neuen frisch auf - ein reines Update der
-    DB-Spalte wuerde eine verwaiste Chain unter der alten (falschen) IP
-    zuruecklassen, die nie zum tatsaechlichen Traffic passt."""
+    """Aendert die Tunnel-IP eines Clients - sowohl die App-interne
+    Firewall-Chain als auch (falls der Peer unter der ALTEN IP in der
+    Ziel-Config gefunden wird) die tatsaechlichen AllowedIPs des WireGuard-
+    Peers auf dem Server, live per "wg set" UND persistent per Config-
+    Rewrite (wireguard.set_peer_allowed_ips(), inkl. Kernel-Route - siehe
+    dort). Deckt zwei Faelle ab:
+
+    1. Korrektur der App-eigenen Buchfuehrung, wenn der tatsaechliche Peer
+       laengst die eingegebene IP hat (z.B. weil "Peers importieren" vor der
+       Ambiguitaets-Erkennung in wireguard.peer_own_ip() faelschlich eine
+       Netzwerk-Adresse uebernommen hatte) - hier findet sich kein Peer
+       unter der ALTEN IP mehr (der ja schon unter der neuen laeuft), das
+       AllowedIPs-Update wird uebersprungen (mit Hinweis), nur die App-Seite
+       wird nachgezogen.
+    2. Tatsaechliches Umziehen eines Peers auf eine neue IP (z.B. von einem
+       versehentlich falsch vergebenen in den passenden IP-Bereich seines
+       Typs) - hier wird der Peer unter der ALTEN IP gefunden, seine
+       AllowedIPs auf die neue IP (plus vorhandene verwaltete Netze)
+       umgeschrieben. WICHTIG: das Geraet selbst (z.B. die RouterOS-
+       Interface-Adresse eines MikroTiks) muss zusaetzlich UNABHAENGIG davon
+       manuell auf die neue IP umgestellt werden - das kann diese App nicht
+       fuer dich erledigen, nur die Server-Seite (Peer-Eintrag + Firewall).
+
+    Ein reines Update der DB-Spalte ohne beides wuerde eine verwaiste Chain
+    unter der alten (falschen) IP zuruecklassen, die nie zum tatsaechlichen
+    Traffic passt."""
     db = get_db()
     client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     if not client:
@@ -225,6 +244,24 @@ def set_client_wg_ip(client_id):
 
     hook_chain = firewall.detect_hook_chain()
     wireguard.run_on_target(firewall.build_remove_script(old_ip, hook_chain))
+
+    peer_note = None
+    peers = wireguard.fetch_wg_peers_from_config()
+    peer = next((p for p in peers if wireguard.peer_own_ip(p) == old_ip), None)
+    if peer is not None:
+        current_networks = [row["cidr"] for row in networks.list_client_networks(db, client_id)]
+        allowed_ips = ",".join([f"{new_ip}/32", *current_networks])
+        ok_peer, out_peer = wireguard.set_peer_allowed_ips(peer["pubkey"], allowed_ips)
+        if ok_peer:
+            peer_note = "AllowedIPs des WireGuard-Peers auf dem Server ebenfalls aktualisiert."
+        else:
+            peer_note = f"ACHTUNG: AllowedIPs-Update des Peers auf dem Server fehlgeschlagen: {out_peer}"
+    else:
+        peer_note = (
+            "Kein Peer unter der bisherigen IP in der Ziel-Config gefunden - nur die App-interne "
+            "Firewall-Regel wurde umgezogen, AllowedIPs auf dem Server unveraendert."
+        )
+
     try:
         db.execute("UPDATE clients SET wg_ip = ? WHERE id = ?", (new_ip, client_id))
         db.commit()
@@ -234,10 +271,11 @@ def set_client_wg_ip(client_id):
 
     client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     ok, out = acl.apply_client(db, client)
+    category = "success" if ok and "ACHTUNG" not in peer_note else "error"
     if ok:
-        flash(f"{client['label']}: Tunnel-IP von {old_ip} auf {new_ip} geaendert und angewendet.", "success")
+        flash(f"{client['label']}: Tunnel-IP von {old_ip} auf {new_ip} geaendert und angewendet. {peer_note}", category)
     else:
-        flash(f"{client['label']}: IP geaendert, aber Anwenden fehlgeschlagen: {out}", "error")
+        flash(f"{client['label']}: IP geaendert, aber Anwenden fehlgeschlagen: {out}. {peer_note}", "error")
     return redirect(url_for("permissions"))
 
 
