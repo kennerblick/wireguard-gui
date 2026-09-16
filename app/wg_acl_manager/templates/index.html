@@ -7,6 +7,8 @@
         <p class="error-text">Konnte Status nicht abrufen: {{ wg_error }}</p>
     {% else %}
         <p class="muted small">
+            WG-Server: <strong class="mono">{{ wg_server_ip }}</strong>
+            &nbsp;|&nbsp;
             Erkannter Einhaengepunkt fuer Regeln: <strong>{{ hook_chain }}</strong>
             {% if hook_chain == "DOCKER-USER" %}(Docker erkannt){% else %}(Standard-FORWARD-Chain){% endif %}
             &nbsp;|&nbsp;
@@ -18,14 +20,60 @@
             {% endif %}
         </p>
     {% endif %}
-    {% if peers is not none %}
+</section>
+
+{% if not wg_error %}
+<section class="panel">
+    <input type="text" id="status-filter" class="mono" placeholder="Filtern nach Name/IP/Endpoint..." style="width: 100%; margin-bottom: 0.5rem;">
+
+    {% for kind, label in group_labels %}
+    <details class="status-group" open>
+        <summary>{{ label }} <span class="badge badge-count">{{ groups[kind] | length }}</span></summary>
+        {% if not groups[kind] %}
+        <p class="muted small">Keine Peers in dieser Gruppe.</p>
+        {% else %}
+        <table class="status-table">
+            <thead>
+                <tr><th>Name</th><th>IP</th><th>Endpoint</th><th>Letzter Handshake</th><th>RX / TX</th></tr>
+            </thead>
+            <tbody>
+                {% for p in groups[kind] %}
+                <tr class="status-row" data-filter="{{ (p.name or p.client.label) | lower }} {{ p.client.wg_ip }} {{ p.endpoint | lower }}">
+                    <td>{{ p.name or p.client.label }}</td>
+                    <td class="mono small">{{ p.client.wg_ip }}</td>
+                    <td>{{ p.endpoint }}</td>
+                    <td>{{ "vor " ~ p.latest_handshake_secs_ago ~ "s" if p.latest_handshake_secs_ago is not none else "nie" }}</td>
+                    <td>{{ p.rx }} / {{ p.tx }}</td>
+                </tr>
+                {% if kind == "router" %}
+                    {% for net in client_networks.get(p.client.id, []) %}
+                    <tr class="status-row network-subrow" data-filter="lan {{ net.cidr }} {{ p.client.label | lower }}">
+                        <td colspan="5">&#8627; LAN <span class="mono">{{ net.cidr }}</span> hinter {{ p.client.label }}</td>
+                    </tr>
+                    {% endfor %}
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </details>
+    {% endfor %}
+
+    {% if unmatched %}
+    <details class="status-group">
+        <summary>Nicht erfasst <span class="badge badge-count">{{ unmatched | length }}</span></summary>
+        <p class="muted small">
+            Peers, die laut WireGuard-Status existieren, aber (noch) keinem
+            Client in dieser App zugeordnet sind - siehe "Berechtigungen" &rarr;
+            "Peers importieren".
+        </p>
         <table class="status-table">
             <thead>
                 <tr><th>Name</th><th>Public Key</th><th>Endpoint</th><th>Allowed IPs</th><th>Letzter Handshake</th><th>RX / TX</th></tr>
             </thead>
             <tbody>
-                {% for p in peers %}
-                <tr>
+                {% for p in unmatched %}
+                <tr class="status-row" data-filter="{{ (p.name or '') | lower }} {{ p.allowed_ips | lower }} {{ p.endpoint | lower }}">
                     <td>{{ p.name if p.name else "-" }}</td>
                     <td class="mono small">{{ p.pubkey[:16] }}...</td>
                     <td>{{ p.endpoint }}</td>
@@ -33,19 +81,37 @@
                     <td>{{ "vor " ~ p.latest_handshake_secs_ago ~ "s" if p.latest_handshake_secs_ago is not none else "nie" }}</td>
                     <td>{{ p.rx }} / {{ p.tx }}</td>
                 </tr>
-                {% else %}
-                <tr><td colspan="6" class="empty-row">Keine Peers erkannt.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
-        <p class="muted small">
-            "Name" wird aus der WireGuard-Config des Ziels gelesen: die erste
-            Zeile direkt unter <code>[Peer]</code> als Kommentar, z.B.
-            <code>#Buero-Router</code>. Client- und Berechtigungsverwaltung
-            findet jetzt unter "Berechtigungen" statt, Gruppen unter
-            "Gruppen".
-        </p>
+    </details>
     {% endif %}
 </section>
+
+<script>
+(function () {
+    "use strict";
+    var input = document.getElementById("status-filter");
+    if (!input) return;
+    var groups = document.querySelectorAll(".status-group");
+    input.addEventListener("input", function () {
+        var q = input.value.trim().toLowerCase();
+        groups.forEach(function (group) {
+            var anyVisible = false;
+            group.querySelectorAll(".status-row").forEach(function (row) {
+                var match = !q || (row.dataset.filter || "").indexOf(q) !== -1;
+                row.style.display = match ? "" : "none";
+                if (match) anyVisible = true;
+            });
+            if (q) {
+                group.open = anyVisible;
+            } else {
+                group.open = true;
+            }
+        });
+    });
+})();
+</script>
+{% endif %}
 
 {% endblock %}

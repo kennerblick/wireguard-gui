@@ -15,11 +15,16 @@ from flask import flash, redirect, render_template, request, url_for
 from .. import acl, app, config, firewall, networks, tags, wireguard
 from ..db import get_db
 
+GROUP_LABELS = [("router", "Router"), ("server", "Externe Server"), ("client", "Clients")]
+
 
 @app.route("/permissions")
 def permissions():
     db = get_db()
     clients = db.execute("SELECT * FROM clients ORDER BY wg_ip").fetchall()
+    groups = {"router": [], "server": [], "client": []}
+    for c in clients:
+        groups[c["kind"]].append(c)
     rules = db.execute(
         """
         SELECT r.id, r.client_id, r.dest_ip, r.dest_tag_id, t.name AS tag_name,
@@ -80,6 +85,9 @@ def permissions():
     return render_template(
         "permissions.html",
         clients=clients,
+        group_labels=GROUP_LABELS,
+        groups=groups,
+        wg_server_ip=config.WG_SERVER_TUNNEL_IP,
         rules_by_client=rules_by_client,
         services_flat=services_flat,
         wg_interface=config.TARGET_WG_INTERFACE,

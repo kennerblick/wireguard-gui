@@ -151,6 +151,44 @@ th { color: #a0aec0; font-weight: 500; }
 .badge-warn { background: #744210; color: #fbd38d; }
 .badge-group { background: #2c5282; color: #bee3f8; margin-left: 0; }
 .badge-router { background: #285e61; color: #81e6d9; }
+.badge-count { background: #2d3748; color: #a0aec0; margin-left: 0.5rem; }
+
+.status-group, .perm-group {
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.75rem;
+    background: #141b28;
+}
+.status-group summary, .perm-group summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: #cbd5e0;
+    font-size: 1.02rem;
+    padding: 0.15rem 0;
+}
+.status-group summary::-webkit-details-marker, .perm-group summary::-webkit-details-marker {
+    color: #63b3ed;
+}
+.status-group[open] summary, .perm-group[open] summary {
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid #2d3748;
+    padding-bottom: 0.5rem;
+}
+.network-subrow td {
+    color: #a0aec0;
+    font-size: 0.82rem;
+    padding-left: 1.5rem;
+    font-style: italic;
+}
+.wg-server-panel {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    background: #1a2332;
+    border-color: #285e61;
+}
 
 .btn {
     background: #2d3748;

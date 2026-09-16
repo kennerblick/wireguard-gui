@@ -1,22 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 
-<section class="panel">
-    <div class="panel-header">
-        <h2>Berechtigungen</h2>
-        <form method="post" action="{{ url_for('apply_all') }}">
-            <button type="submit" class="btn btn-primary">Alle anwenden</button>
-        </form>
-    </div>
-    <p class="muted small">
-        Wer darf wohin - pro Client eine Karte mit den aktuell erlaubten
-        Zielen. Gruppen-Zuordnung (welcher Client zu welcher Gruppe gehoert)
-        wird unter "Gruppen" gepflegt; hier waehlst du eine Gruppe nur noch
-        als Regel-Ziel aus.
-    </p>
-
-    {% for client in clients %}
-    <div class="perm-card {% if not client.restricted %}perm-card-unrestricted{% endif %}">
+{% macro client_card(client) %}
+    {% set my_networks = client_networks.get(client.id, []) %}
+    <div class="perm-card {% if not client.restricted %}perm-card-unrestricted{% endif %}"
+         data-filter="{{ client.label | lower }} {{ client.wg_ip }} {{ client_tag_names.get(client.id, []) | join(' ') | lower }}">
         <div class="perm-card-header">
             <div class="perm-card-title">
                 <strong>{{ client.label }}</strong>
@@ -28,9 +16,6 @@
                     <span class="badge badge-warn">Uneingeschraenkt (volles Mesh)</span>
                 {% else %}
                     <span class="badge badge-ok">Eingeschraenkt</span>
-                {% endif %}
-                {% if client.kind != "client" %}
-                    <span class="badge badge-router">{{ "Server" if client.kind == "server" else "Router" }}</span>
                 {% endif %}
                 {% for name in client_tag_names.get(client.id, []) %}
                     <span class="badge badge-group">{{ name }}</span>
@@ -59,7 +44,6 @@
             </div>
         </div>
 
-        {% set my_networks = client_networks.get(client.id, []) %}
         {% if client.kind == "router" or my_networks %}
         <div class="perm-card-networks">
             <span class="muted small">Verwaltete Netze (LAN hinter diesem Client, z.B. MikroTik):</span>
@@ -137,8 +121,40 @@
         <p class="muted">Dieser Client ist nicht eingeschraenkt und nutzt die normale Mesh-Regel (Zugriff auf alle Peers).</p>
         {% endif %}
     </div>
-    {% else %}
-    <p class="muted">Noch keine Clients erfasst.</p>
+{% endmacro %}
+
+<section class="panel">
+    <div class="panel-header">
+        <h2>Berechtigungen</h2>
+        <form method="post" action="{{ url_for('apply_all') }}">
+            <button type="submit" class="btn btn-primary">Alle anwenden</button>
+        </form>
+    </div>
+    <p class="muted small">
+        Wer darf wohin - gruppiert nach Server/Router/Client, pro Client eine
+        Karte mit den aktuell erlaubten Zielen. Gruppen-Zuordnung (welcher
+        Client zu welcher Gruppe gehoert) wird unter "Gruppen" gepflegt; hier
+        waehlst du eine Gruppe nur noch als Regel-Ziel aus.
+    </p>
+
+    <input type="text" id="perm-filter" class="mono" placeholder="Filtern nach Name/IP/Gruppe..." style="width: 100%; margin-bottom: 0.75rem;">
+
+    <div class="perm-group wg-server-panel">
+        <strong>WG-Server</strong> <span class="mono">{{ wg_server_ip }}</span>
+        <span class="muted small">- der Tunnel-Hub selbst, kein verwalteter Client (Topologie siehe "Netzplan").</span>
+    </div>
+
+    {% for kind, label in group_labels %}
+    <details class="perm-group" data-group open>
+        <summary>{{ label }} <span class="badge badge-count">{{ groups[kind] | length }}</span></summary>
+        {% if not groups[kind] %}
+        <p class="muted small">Noch keine Clients in dieser Gruppe.</p>
+        {% else %}
+            {% for client in groups[kind] %}
+                {{ client_card(client) }}
+            {% endfor %}
+        {% endif %}
+    </details>
     {% endfor %}
 
     <datalist id="known-destinations">
@@ -151,6 +167,27 @@
         {% endfor %}
     </datalist>
 </section>
+
+<script>
+(function () {
+    "use strict";
+    var input = document.getElementById("perm-filter");
+    if (!input) return;
+    var groups = document.querySelectorAll(".perm-group[data-group]");
+    input.addEventListener("input", function () {
+        var q = input.value.trim().toLowerCase();
+        groups.forEach(function (group) {
+            var anyVisible = false;
+            group.querySelectorAll(".perm-card").forEach(function (card) {
+                var match = !q || (card.dataset.filter || "").indexOf(q) !== -1;
+                card.style.display = match ? "" : "none";
+                if (match) anyVisible = true;
+            });
+            group.open = q ? anyVisible : true;
+        });
+    });
+})();
+</script>
 
 {% if restricted_clients %}
 <section class="panel">

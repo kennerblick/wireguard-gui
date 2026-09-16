@@ -202,7 +202,14 @@ jeweiligen Client aus.
 
 - CRUD für Clients, Services, Regeln über die Web-UI
 - Live-Anwenden bei jeder Änderung (kein separater "Speichern"-Schritt nötig)
-- Dashboard zeigt echten `wg show <interface> dump`-Status vom Zielserver
+- Dashboard zeigt echten `wg show <interface> dump`-Status vom Zielserver,
+  gruppiert nach `clients.kind` (Router/Externe Server/Clients, gleiches
+  `<details>`-Muster wie auf der Berechtigungen-Seite, siehe dort) -
+  `routes/dashboard.py` matcht dafuer jeden Live-Peer per Pubkey gegen
+  `wireguard.peer_own_ip()` aus der Config und darueber gegen `clients.wg_ip`;
+  ein Router bekommt seine verwalteten Netze direkt als eingerueckte
+  Zusatzzeile darunter. Peers ohne Match (z.B. noch nicht importiert) landen
+  gesammelt unter "Nicht erfasst" statt zu verschwinden.
 - Generalisiert (nicht mehr hart auf eine Umgebung zugeschnitten):
   - `TARGET_WG_INTERFACE` konfigurierbar (Server nutzen nicht alle `wg0`)
   - Automatische Docker- vs. Nicht-Docker-Erkennung für den Hook-Punkt
@@ -312,6 +319,20 @@ jeweiligen Client aus.
   **Zuordnung** (welcher Client zu welcher Gruppe gehoert) findet
   ausschließlich auf der Gruppen-Seite statt (siehe unten) - hier wird
   eine Gruppe nur noch als Regel-Ziel ausgewählt.
+  **Gruppierung nach `clients.kind`** (`routes/permissions.py:GROUP_LABELS`,
+  Reihenfolge Router/Externe Server/Clients): Client-Karten stehen nicht
+  mehr in einer einzigen flachen Liste, sondern je Typ in einem
+  einklappbaren `<details>`-Block (`.perm-group`) mit Anzahl-Badge -
+  gleiches Muster wie beim Dashboard (siehe dort), macro-basiert
+  (`{% macro client_card(client) %}` in `permissions.html`, damit die
+  Karten-Auszeichnung nicht dreifach dupliziert werden muss - Jinja-Makros
+  im selben Template sehen automatisch den Render-Kontext, kein `with
+  context`/Parameter-Durchreichen fuer `rules_by_client` etc. noetig). Ein
+  reiner Info-Panel oben (`.wg-server-panel`) zeigt zusaetzlich den
+  WG-Server selbst (`config.WG_SERVER_TUNNEL_IP`) - kein Client-Datensatz,
+  nur zur Einordnung. Ein Textfeld filtert client-seitig per JS ueber
+  `data-filter`-Attribute (Label/IP/Gruppen-Namen) und klappt beim Tippen
+  nur Gruppen mit Treffern auf.
 - **Unit-Tests** (`tests/`, `pytest`) für Script-Generierung
   (`build_apply_script`/`build_remove_script`), Eingabevalidierung und
   Hook-Erkennung; CI via `.github/workflows/tests.yml`.
