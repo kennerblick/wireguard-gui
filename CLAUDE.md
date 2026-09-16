@@ -398,7 +398,22 @@ jeweiligen Client aus.
   des passenden `[Peer]`-Blocks, andere Bloecke bleiben unberuehrt). Ohne
   diese serverseitige AllowedIPs-Erweiterung wuerde der WireGuard-Server
   Pakete an das Netz gar nicht erst zum Router routen, unabhaengig von den
-  ACL-Regeln dieser App. `acl.import_peers_from_config()` erkennt bereits
+  ACL-Regeln dieser App.
+  **`wireguard.route_replace_lines()`** (in Produktion aufgetreten, dritter
+  Layer desselben Problems): `wg set ... allowed-ips ...` aendert nur
+  WireGuards EIGENE interne Crypto-Routing-Tabelle, NICHT die System-
+  Routing-Tabelle - die setzt sonst ausschliesslich `wg-quick up` beim
+  (Neu-)Start, abgeleitet aus der Config. Ohne einen Neustart des Interfaces
+  blieb ein live per `wg set` hinzugefuegtes Netz fuer den Kernel unsichtbar:
+  AllowedIPs korrekt gesetzt, ACL-Regel korrekt erlaubt, aber kein Paket kam
+  an, weil der Kernel gar nicht erst wusste, dieses Ziel ueber `wg0` zu
+  routen. Beide Schreib-Pfade (`register_peer_on_target()`,
+  `set_peer_allowed_ips()`) haengen deshalb nach dem `wg set` fuer jedes Netz
+  in der (neuen) AllowedIPs-Liste ein `ip route replace <cidr> dev <iface>`
+  an (`replace` statt `add`, damit ein bereits bestehender Eintrag - typisch
+  die eigene, von `wg-quick` beim Start gesetzte /32-Route - keinen Fehler
+  wirft).
+  `acl.import_peers_from_config()` erkennt bereits
   konfigurierte verwaltete Netze automatisch (AllowedIPs-Eintraege jenseits
   der eigenen IP und ausserhalb des Mesh-Subnetzes, via
   `wireguard.peer_managed_networks()`) und uebernimmt sie beim Import.

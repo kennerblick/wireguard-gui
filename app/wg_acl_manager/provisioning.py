@@ -336,6 +336,7 @@ def register_peer_on_target(pubkey: str, ip: str, label: str, extra_networks=Non
     script = (
         "set -e\n"
         f"wg set {iface} peer {pubkey} allowed-ips {allowed_ips}\n"
+        f"{wireguard.route_replace_lines(allowed_ips, iface)}\n"
         f'CONF=/etc/wireguard/{iface}.conf\n'
         f'if ! grep -qF "{pubkey}" "$CONF" 2>/dev/null; then\n'
         f'  printf "\\n[Peer]\\n#{label}\\nPublicKey = {pubkey}\\nAllowedIPs = {allowed_ips}\\n" >> "$CONF"\n'

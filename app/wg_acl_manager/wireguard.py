@@ -271,6 +271,33 @@ def fetch_wg_interface_info():
     return info
 
 
+def route_replace_lines(allowed_ips_csv: str, iface: str) -> str:
+    """Bash-Zeilen, die fuer jedes Netz in einer Komma-Liste (z.B. AllowedIPs
+    eines Peers) eine Kernel-Route ueber das WG-Interface sicherstellen.
+
+    "wg set ... allowed-ips ..." aendert NUR WireGuards eigene interne
+    Crypto-Routing-Tabelle (welcher Peer ist fuer welches Ziel zustaendig),
+    NICHT die System-Routing-Tabelle - die noetigen "ip route"-Eintraege
+    setzt sonst ausschliesslich "wg-quick up" beim (Neu-)Start des
+    Interfaces, abgeleitet aus AllowedIPs in der Config. Ohne diesen
+    Nachtrag hier bleibt eine per "wg set" live hinzugefuegte CIDR fuer den
+    Kernel unsichtbar: Pakete an ein neu hinzugefuegtes Netz (z.B. ein LAN
+    hinter einem Router) werden dann gar nicht erst zum WG-Interface
+    geroutet, unabhaengig davon, dass WireGuard selbst den Peer dafuer laengst
+    kennt (in Produktion aufgetreten: verwaltetes Netz korrekt in AllowedIPs
+    gesetzt, ACL-Regel korrekt erlaubt, trotzdem kam kein Paket an). "ip
+    route replace" statt "add", damit ein bereits existierender Eintrag
+    (typischerweise die eigene /32-Adresse, von wg-quick beim Start bereits
+    gesetzt) keinen Fehler wirft, sondern einfach bestaetigt/aktualisiert
+    wird.
+    """
+    return "\n".join(
+        f'ip route replace {net.strip()} dev {iface} 2>/dev/null || true'
+        for net in allowed_ips_csv.split(",")
+        if net.strip()
+    )
+
+
 def set_peer_allowed_ips(pubkey: str, allowed_ips_csv: str):
     """Setzt die AllowedIPs eines bereits bestehenden Peers live (`wg set`)
     UND dauerhaft in der Server-Config.
@@ -293,6 +320,7 @@ def set_peer_allowed_ips(pubkey: str, allowed_ips_csv: str):
     script = (
         "set -e\n"
         f"wg set {iface} peer {pubkey} allowed-ips {allowed_ips_csv}\n"
+        f"{route_replace_lines(allowed_ips_csv, iface)}\n"
         f"CONF=/etc/wireguard/{iface}.conf\n"
         f"awk -v pubkey='{pubkey}' -v newip='{allowed_ips_csv}' '\n"
         "BEGIN { inblock = 0; inpeer = 0 }\n"
