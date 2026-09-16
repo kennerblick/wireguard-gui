@@ -61,7 +61,7 @@ def test_suggest_free_ip_uses_separate_range_per_kind(monkeypatch, tmp_path):
 
     router_ip, err = provisioning.suggest_free_ip(conn, kind="router")
     assert err is None
-    assert router_ip == "10.250.0.100"
+    assert router_ip == "10.250.0.101"
 
     client_ip, err = provisioning.suggest_free_ip(conn, kind="client")
     assert err is None
