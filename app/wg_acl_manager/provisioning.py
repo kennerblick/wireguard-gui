@@ -15,8 +15,12 @@ import ipaddress
 from . import config, wireguard
 
 
-def suggest_free_ip(db):
-    """Schlaegt die naechste freie IP im konfigurierten Subnetz vor.
+def suggest_free_ip(db, kind: str = "client"):
+    """Schlaegt die naechste freie IP im konfigurierten Subnetz vor,
+    beschraenkt auf den fuer `kind` konfigurierten IP-Bereich (letztes
+    Oktett, siehe config.IP_RANGES_BY_KIND) - Server, Router und Clients
+    bekommen so konsistent Adressen aus eigenen, getrennten Bereichen statt
+    irgendeiner freien IP im gesamten Subnetz.
 
     Liest das Subnetz aus der [Interface]-Address-Zeile der Ziel-Config und
     schliesst bereits vergebene IPs aus (WireGuard-Peers laut Config,
@@ -40,10 +44,16 @@ def suggest_free_ip(db):
     for row in db.execute("SELECT wg_ip FROM clients").fetchall():
         used.add(row["wg_ip"])
 
-    for candidate in interface.network.hosts():
+    start, end = config.IP_RANGES_BY_KIND.get(kind, config.IP_RANGE_CLIENT)
+    network = interface.network
+    base = int(network.network_address)
+    for offset in range(start, end + 1):
+        candidate = ipaddress.ip_address(base + offset)
+        if candidate not in network:
+            break  # Bereich reicht ueber das tatsaechliche Subnetz hinaus
         if str(candidate) not in used:
             return str(candidate), None
-    return None, "Keine freie IP im Subnetz gefunden."
+    return None, f"Keine freie IP im {kind}-Bereich ({start}-{end}) gefunden."
 
 
 def validate_wg_pubkey(pubkey: str):

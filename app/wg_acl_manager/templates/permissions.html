@@ -29,11 +29,21 @@
                 {% else %}
                     <span class="badge badge-ok">Eingeschraenkt</span>
                 {% endif %}
+                {% if client.kind != "client" %}
+                    <span class="badge badge-router">{{ "Server" if client.kind == "server" else "Router" }}</span>
+                {% endif %}
                 {% for name in client_tag_names.get(client.id, []) %}
                     <span class="badge badge-group">{{ name }}</span>
                 {% endfor %}
             </div>
             <div class="perm-card-actions">
+                <form method="post" action="{{ url_for('set_client_kind', client_id=client.id) }}" class="inline-form kind-form">
+                    <select name="kind" onchange="this.form.submit()">
+                        <option value="client" {% if client.kind == "client" %}selected{% endif %}>Client</option>
+                        <option value="router" {% if client.kind == "router" %}selected{% endif %}>Router</option>
+                        <option value="server" {% if client.kind == "server" %}selected{% endif %}>Server</option>
+                    </select>
+                </form>
                 <form method="post" action="{{ url_for('toggle_client', client_id=client.id) }}">
                     <button type="submit" class="btn btn-small">
                         {{ "Einschraenkung deaktivieren" if client.restricted else "Einschraenkung aktivieren" }}
@@ -49,15 +59,22 @@
             </div>
         </div>
 
+        {% set my_networks = client_networks.get(client.id, []) %}
+        {% if client.kind == "router" or my_networks %}
         <div class="perm-card-networks">
             <span class="muted small">Verwaltete Netze (LAN hinter diesem Client, z.B. MikroTik):</span>
+            {% if client.kind != "router" %}
+            <span class="badge badge-warn">Typ ist nicht "Router" - nur Leeren moeglich</span>
+            {% endif %}
             <form method="post" action="{{ url_for('set_client_networks', client_id=client.id) }}" class="inline-form">
                 <input type="text" name="networks" class="mono"
-                       value="{{ client_networks.get(client.id, []) | map(attribute='cidr') | join(', ') }}"
-                       placeholder="z.B. 192.168.88.0/24, 192.168.5.0/24">
+                       value="{{ my_networks | map(attribute='cidr') | join(', ') }}"
+                       placeholder="z.B. 192.168.88.0/24, 192.168.5.0/24"
+                       {% if client.kind != "router" %}title="Erst Typ auf 'Router' setzen, um neue Netze einzutragen - Leeren geht immer."{% endif %}>
                 <button type="submit" class="btn btn-tiny">Speichern</button>
             </form>
         </div>
+        {% endif %}
 
         {% if client.restricted %}
         <table class="rules-table perm-rules-table">
@@ -210,6 +227,11 @@
         <input type="text" name="wg_ip" placeholder="WG-Tunnel-IP, z.B. 10.250.0.210" required>
         <input type="text" name="label" placeholder="Bezeichnung, z.B. Mitarbeiter Max" required>
         <label class="checkbox-label"><input type="checkbox" name="restricted" checked> Eingeschraenkt</label>
+        <select name="kind">
+            <option value="client" selected>Client</option>
+            <option value="router">Router (verwaltet ein LAN dahinter)</option>
+            <option value="server">Server</option>
+        </select>
         <button type="submit" class="btn btn-primary">Hinzufuegen</button>
     </form>
     <p class="muted small">

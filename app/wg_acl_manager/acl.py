@@ -135,11 +135,11 @@ def import_peers_from_config(db):
             skipped += 1
             continue
         label = peer.get("name") or ip
-        cur = db.execute(
-            "INSERT INTO clients (wg_ip, label, restricted) VALUES (?, ?, 1)",
-            (ip, label),
-        )
         managed = wireguard.peer_managed_networks(peer, ip, wg_network)
+        cur = db.execute(
+            "INSERT INTO clients (wg_ip, label, restricted, kind) VALUES (?, ?, 1, ?)",
+            (ip, label, "router" if managed else "client"),
+        )
         if managed:
             networks.set_client_networks(db, cur.lastrowid, managed)
         existing_ips.add(ip)

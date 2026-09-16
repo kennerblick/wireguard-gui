@@ -150,6 +150,7 @@ th { color: #a0aec0; font-weight: 500; }
 .badge-ok { background: #22543d; color: #9ae6b4; }
 .badge-warn { background: #744210; color: #fbd38d; }
 .badge-group { background: #2c5282; color: #bee3f8; margin-left: 0; }
+.badge-router { background: #285e61; color: #81e6d9; }
 
 .btn {
     background: #2d3748;

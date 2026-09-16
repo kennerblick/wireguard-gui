@@ -31,8 +31,11 @@ def _parse_networks(raw: str):
 @app.route("/provision")
 def provision():
     db = get_db()
-    suggested_ip, ip_error = provisioning.suggest_free_ip(db)
-    return render_template("provision.html", suggested_ip=suggested_ip, ip_error=ip_error)
+    kind = request.args.get("kind", "client").strip().lower()
+    if kind not in ("server", "router", "client"):
+        kind = "client"
+    suggested_ip, ip_error = provisioning.suggest_free_ip(db, kind)
+    return render_template("provision.html", suggested_ip=suggested_ip, ip_error=ip_error, kind=kind)
 
 
 @app.route("/provision/script")
@@ -116,6 +119,9 @@ def provision_register():
     ip_raw = request.form.get("ip", "").strip()
     pubkey_raw = request.form.get("pubkey", "").strip()
     platform = request.form.get("platform", "").strip().lower()
+    kind = request.form.get("kind", "client").strip().lower()
+    if kind not in ("server", "router", "client"):
+        kind = "client"
 
     if not config.LABEL_RE.match(label):
         flash("Ungueltiger Name (erlaubt: Buchstaben, Zahlen, Leerzeichen, . _ - ( )).", "error")
@@ -132,6 +138,12 @@ def provision_register():
     managed_networks, invalid_networks = _parse_networks(request.form.get("networks", ""))
     if invalid_networks:
         flash(f"Ungueltige verwaltete Netze ignoriert: {', '.join(invalid_networks)}", "error")
+    if managed_networks and kind != "router":
+        # Verwaltete Netze machen nur bei einem Router Sinn - unabhaengig vom
+        # gewaehlten Typ automatisch hochstufen, statt einen Client mit einem
+        # verwaisten Netz anzulegen (genau die Art von falscher Zuordnung,
+        # die die Typ-Unterscheidung eigentlich verhindern soll).
+        kind = "router"
 
     ok, out = provisioning.register_peer_on_target(pubkey, str(ip_obj), label, extra_networks=managed_networks)
     if not ok:
@@ -140,8 +152,8 @@ def provision_register():
 
     try:
         db.execute(
-            "INSERT INTO clients (wg_ip, label, restricted) VALUES (?, ?, 1)",
-            (str(ip_obj), label),
+            "INSERT INTO clients (wg_ip, label, restricted, kind) VALUES (?, ?, 1, ?)",
+            (str(ip_obj), label, kind),
         )
         db.commit()
         client_id = db.execute("SELECT id FROM clients WHERE wg_ip = ?", (str(ip_obj),)).fetchone()["id"]
@@ -162,7 +174,7 @@ def provision_register():
             f"Client ohne Regeln angelegt"
             + (f" (Gruppe {tag_name!r} zugewiesen)" if tag_name else "")
             + (f", verwaltet Netz(e) {', '.join(managed_networks)}" if managed_networks else "")
-            + ". Zugriffsrechte im Dashboard/Netzplan ergaenzen.",
+            + ". Zugriffsrechte unter 'Berechtigungen' ergaenzen.",
             "success",
         )
     except sqlite3.IntegrityError:

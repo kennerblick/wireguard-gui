@@ -17,6 +17,16 @@ def set_client_networks(client_id):
 
     raw = request.form.get("networks", "")
     lines = [part for chunk in raw.splitlines() for part in chunk.split(",")]
+    # Nur Router duerfen NEUE verwaltete Netze bekommen - Leeren (Cleanup
+    # einer versehentlich falsch zugeordneten Zeile) bleibt fuer JEDEN Client
+    # jederzeit moeglich, unabhaengig vom Typ.
+    if any(part.strip() for part in lines) and client["kind"] != "router":
+        flash(
+            f"{client['label']} ist nicht als Router markiert - verwaltete Netze koennen nur "
+            f"Routern zugeordnet werden. Erst den Typ auf 'Router' setzen.",
+            "error",
+        )
+        return redirect(url_for("permissions"))
     errors = networks.set_client_networks(db, client_id, lines)
     if errors:
         flash(f"Ungueltige Netze ignoriert: {', '.join(errors)}", "error")

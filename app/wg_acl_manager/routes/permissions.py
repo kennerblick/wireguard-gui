@@ -129,6 +129,9 @@ def add_client():
     wg_ip_raw = request.form["wg_ip"].strip()
     label = request.form["label"].strip()
     restricted = 1 if request.form.get("restricted") == "on" else 0
+    kind = request.form.get("kind", "client").strip().lower()
+    if kind not in ("server", "router", "client"):
+        kind = "client"
     try:
         wg_ip = str(ipaddress.ip_address(wg_ip_raw))
     except ValueError:
@@ -139,13 +142,35 @@ def add_client():
         return redirect(url_for("permissions"))
     try:
         db.execute(
-            "INSERT INTO clients (wg_ip, label, restricted) VALUES (?, ?, ?)",
-            (wg_ip, label, restricted),
+            "INSERT INTO clients (wg_ip, label, restricted, kind) VALUES (?, ?, ?, ?)",
+            (wg_ip, label, restricted, kind),
         )
         db.commit()
         flash(f"Client {label} ({wg_ip}) hinzugefuegt.", "success")
     except sqlite3.IntegrityError:
         flash(f"Ein Client mit IP {wg_ip} existiert bereits.", "error")
+    return redirect(url_for("permissions"))
+
+
+@app.route("/clients/<int:client_id>/kind/set", methods=["POST"])
+def set_client_kind(client_id):
+    """Setzt den Typ (Server/Router/Client) eines Clients - u.a. massgeblich
+    dafuer, ob er "Verwaltete Netze" pflegen darf (siehe routes/networks.py
+    fuer die serverseitige Absicherung, die das zusaetzlich zur UI
+    durchsetzt) und aus welchem IP-Bereich "Client bereitstellen" ihm eine
+    IP vorschlaegt (siehe provisioning.suggest_free_ip())."""
+    db = get_db()
+    client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        flash("Client nicht gefunden.", "error")
+        return redirect(url_for("permissions"))
+    kind = request.form.get("kind", "").strip().lower()
+    if kind not in ("server", "router", "client"):
+        flash(f"Ungueltiger Typ: {kind!r}", "error")
+        return redirect(url_for("permissions"))
+    db.execute("UPDATE clients SET kind = ? WHERE id = ?", (kind, client_id))
+    db.commit()
+    flash(f"{client['label']}: Typ auf {kind!r} gesetzt.", "success")
     return redirect(url_for("permissions"))
 
 

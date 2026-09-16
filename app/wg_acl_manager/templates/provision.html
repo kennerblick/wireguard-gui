@@ -14,6 +14,14 @@
     {% if ip_error %}
     <p class="error-text">{{ ip_error }}</p>
     {% endif %}
+    <form method="get" action="{{ url_for('provision') }}" class="inline-form">
+        <label for="kind-select">Typ (bestimmt den vorgeschlagenen IP-Bereich):</label>
+        <select name="kind" id="kind-select" onchange="this.form.submit()">
+            <option value="client" {% if kind == "client" %}selected{% endif %}>Client</option>
+            <option value="router" {% if kind == "router" %}selected{% endif %}>Router (verwaltet ein LAN dahinter)</option>
+            <option value="server" {% if kind == "server" %}selected{% endif %}>Server</option>
+        </select>
+    </form>
 </section>
 
 <section class="panel">
@@ -26,12 +34,14 @@
             <option value="windows">Windows</option>
             <option value="mikrotik">MikroTik</option>
         </select>
-        <input type="text" name="networks" placeholder="Verwaltete Netze, z.B. 192.168.88.0/24 (nur MikroTik, optional)">
+        <input type="hidden" name="kind" value="{{ kind }}">
+        <input type="text" name="networks" placeholder="Verwaltete Netze, z.B. 192.168.88.0/24 (nur bei Typ Router, optional)">
         <button type="submit" class="btn btn-primary">Herunterladen</button>
     </form>
     <p class="muted small">
-        Vorgeschlagene IP ist die nächste freie im konfigurierten Subnetz -
-        bei Bedarf überschreiben. Linux: Bash-Skript auf dem neuen Rechner
+        Vorgeschlagene IP ist die nächste freie im IP-Bereich des oben
+        gewählten Typs (Server/Router/Client haben getrennte Bereiche) - bei
+        Bedarf überschreiben. Linux: Bash-Skript auf dem neuen Rechner
         mit <code>sudo</code> ausführen. Windows: PowerShell-Skript als
         Administrator ausführen (benötigt installiertes WireGuard für
         Windows). MikroTik: Skript-Inhalt komplett ins RouterOS-Terminal
@@ -54,6 +64,11 @@
             <option value="windows">Windows</option>
             <option value="mikrotik">MikroTik</option>
         </select>
+        <select name="kind">
+            <option value="client" {% if kind == "client" %}selected{% endif %}>Client</option>
+            <option value="router" {% if kind == "router" %}selected{% endif %}>Router</option>
+            <option value="server" {% if kind == "server" %}selected{% endif %}>Server</option>
+        </select>
         <input type="text" name="pubkey" placeholder="Public Key aus der Skript-Ausgabe" required class="mono">
         <input type="text" name="networks" placeholder="Verwaltete Netze (wie in Schritt 1, optional)">
         <button type="submit" class="btn btn-primary">Registrieren</button>
@@ -63,12 +78,14 @@
         Neustart) und hängt einen <code>[Peer]</code>-Block mit
         <code>#Name</code>-Kommentar an die Server-Config an (damit er einen
         Neustart übersteht). Legt zusätzlich einen eingeschränkten
-        Client-Datensatz ohne Regeln in dieser App an und weist automatisch
-        eine zur Plattform passende Gruppe zu (z.B. "mikrotik") - unter
-        "Gruppen" frei änderbar. "Verwaltete Netze" (falls angegeben) werden
-        zusätzlich zur eigenen Tunnel-IP in die AllowedIPs dieses Peers auf
-        dem Server aufgenommen und als Rule-Ziel-Vorschlag hinterlegt -
-        nachträglich änderbar über die Client-Karte im Dashboard.
+        Client-Datensatz ohne Regeln in dieser App an, mit dem hier gewählten
+        Typ (bei angegebenen "Verwalteten Netzen" automatisch "Router"), und
+        weist automatisch eine zur Plattform passende Gruppe zu (z.B.
+        "mikrotik") - unter "Gruppen" frei änderbar. "Verwaltete Netze"
+        (falls angegeben) werden zusätzlich zur eigenen Tunnel-IP in die
+        AllowedIPs dieses Peers auf dem Server aufgenommen und als
+        Rule-Ziel-Vorschlag hinterlegt - nachträglich änderbar über die
+        Client-Karte unter "Berechtigungen".
     </p>
 </section>
 

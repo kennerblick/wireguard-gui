@@ -45,6 +45,7 @@ def init_db():
             wg_ip TEXT UNIQUE NOT NULL,
             label TEXT NOT NULL,
             restricted INTEGER NOT NULL DEFAULT 1,
+            kind TEXT NOT NULL DEFAULT 'client' CHECK (kind IN ('server', 'router', 'client')),
             notes TEXT DEFAULT ''
         );
 
@@ -123,3 +124,21 @@ def run_migrations(db):
     existing_columns = {row["name"] for row in db.execute("PRAGMA table_info(rules)").fetchall()}
     if "dest_tag_id" not in existing_columns:
         db.execute("ALTER TABLE rules ADD COLUMN dest_tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE")
+
+    client_columns = {row["name"] for row in db.execute("PRAGMA table_info(clients)").fetchall()}
+    if "kind" not in client_columns:
+        # Bewusst OHNE Backfill anhand vorhandener client_networks-Zeilen:
+        # genau solche verwaisten/versehentlich falsch zugeordneten Zeilen
+        # (z.B. ein verwaltetes Netz auf einem gewoehnlichen Client statt auf
+        # dem tatsaechlichen Router) sind der Grund fuer diese Unterscheidung -
+        # ein automatisches Backfill wuerde die falsche Zuordnung nur
+        # mitnehmen statt sie sichtbar zu machen. Nach dem Update muss ein
+        # echter Router/Server einmalig ueber die Typ-Auswahl auf der
+        # Berechtigungen-Seite (wieder) als solcher markiert werden; sein
+        # bestehendes verwaltetes Netz bleibt in der DB und auf dem Server
+        # unveraendert aktiv, ist bis dahin nur nicht mehr über die UI
+        # editierbar.
+        db.execute(
+            "ALTER TABLE clients ADD COLUMN kind TEXT NOT NULL DEFAULT 'client' "
+            "CHECK (kind IN ('server', 'router', 'client'))"
+        )

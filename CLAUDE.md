@@ -341,9 +341,13 @@ jeweiligen Client aus.
   WG-Schluesselpaar wird IMMER lokal auf dem neuen Client erzeugt (im
   generierten Skript selbst, per `wg genkey`/`wg.exe genkey`) - der private
   Schluessel verlaesst dieses Geraet nie und wird von wg-acl-manager weder
-  gesehen noch gespeichert. Schritt 1 (`provision_script()`) generiert das
-  Skript/die Config mit einer per `suggest_free_ip()` vorgeschlagenen freien
-  IP (aus der [Interface]-Address der Ziel-Config abgeleitetes Subnetz,
+  gesehen noch gespeichert. Ueber der Seite waehlbarer **Typ** (Server/
+  Router/Client, per `?kind=`-Query-Parameter, siehe "Server/Router/Client-
+  Unterscheidung" unten) bestimmt, aus welchem IP-Bereich Schritt 1 die
+  naechste freie IP vorschlaegt. Schritt 1 (`provision_script()`) generiert
+  das Skript/die Config mit einer per `suggest_free_ip(db, kind)`
+  vorgeschlagenen freien IP (aus der [Interface]-Address der Ziel-Config
+  abgeleitetes Subnetz, eingeschraenkt auf `config.IP_RANGES_BY_KIND[kind]`,
   abzueglich aller Peers laut Config + Clients laut DB) sowie dem live
   ermittelten Server-Pubkey (`wg show <iface> public-key`) und
   `WG_SERVER_ENDPOINT`. Schritt 2 (`provision_register()`) nimmt den vom
@@ -421,6 +425,37 @@ jeweiligen Client aus.
   Schritt 1/2 ab und erzeugt zusaetzliche Firewall-Freigaben im generierten
   RouterOS-Skript; nachtraeglich aenderbar ueber ein Textfeld in der
   Client-Karte auf der Berechtigungen-Seite (`/clients/<id>/networks/set`).
+- **Server/Router/Client-Unterscheidung** (`clients.kind`, Werte `server`/
+  `router`/`client`, additive Migration mit `DEFAULT 'client'`, KEIN
+  Backfill anhand vorhandener `client_networks`-Zeilen - siehe
+  `db.run_migrations()`): in Produktion aufgetreten, dass "Verwaltete Netze"
+  versehentlich auf einem gewoehnlichen Client statt auf dem tatsaechlichen
+  Router eingetragen wurde (nichts in der App verhinderte das - jeder
+  Client konnte ein Netz bekommen). Zwei Auswirkungen:
+  - **"Verwaltete Netze" nur fuer `kind == "router"`**: `routes/networks.py`
+    (`set_client_networks()`) lehnt das Eintragen NEUER Netze fuer jeden
+    anderen Typ serverseitig ab (nicht nur UI-seitig versteckt) - eine
+    Absicherung, die zusaetzlich zur `permissions.html`-Anzeige greift.
+    Leeren (Cleanup einer falsch zugeordneten Altlast) bleibt fuer JEDEN
+    Client immer moeglich, unabhaengig vom Typ - sonst gaebe es keinen Weg
+    zurueck aus einer versehentlichen Zuordnung ausser direktem DB-Zugriff.
+    Typ aenderbar ueber `/clients/<id>/kind/set` (Dropdown je Client-Karte
+    auf der Berechtigungen-Seite, sofort wirksam per `onchange`).
+  - **Getrennte IP-Bereiche je Typ** (`config.IP_RANGES_BY_KIND`,
+    `IP_RANGE_SERVER`/`IP_RANGE_ROUTER`/`IP_RANGE_CLIENT`-Env-Variablen,
+    Format `"start-end"` als letztes Oktett, Standard `2-50`/`100-150`/
+    `201-245` - aus einer echten Produktiv-Config abgeleitet): "Client
+    bereitstellen" hat oben einen Typ-Umschalter (`?kind=`), der Schritt 1's
+    vorgeschlagene IP auf den passenden Bereich einschraenkt
+    (`suggest_free_ip(db, kind)`); ist der Bereich erschoepft, gibt es einen
+    Fehler statt einer IP ausserhalb des Bereichs. Werden bei der Registrierung
+    (Schritt 2) "Verwaltete Netze" angegeben, wird der Typ unabhaengig von der
+    Dropdown-Auswahl automatisch auf `router` hochgestuft (`routes/
+    provisioning.py:provision_register()`) - verhindert genau die Ausgangs-
+    situation dieses Features erneut ueber diesen Weg.
+  - `acl.import_peers_from_config()` setzt `kind = "router"` automatisch,
+    wenn beim Import verwaltete Netze erkannt werden (siehe oben), sonst
+    `"client"`.
 
 ## Noch nicht umgesetzt / bekannte Lücken
 

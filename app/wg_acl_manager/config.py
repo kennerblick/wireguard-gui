@@ -59,6 +59,35 @@ TAG_NAME_RE = re.compile(r"^[A-Za-z0-9 _.\-()]{1,64}$")
 SYSLOG_PORT_LINUX = os.environ.get("PROVISION_SYSLOG_PORT_LINUX", "5141")
 SYSLOG_PORT_MIKROTIK = os.environ.get("PROVISION_SYSLOG_PORT_MIKROTIK", "5140")
 
+
+def _parse_ip_range(env_name: str, default: str) -> tuple:
+    """Liest env_name als 'start-end' (letztes Oktett des Subnetzes, z.B.
+    '201-245') fuer suggest_free_ip()'s Typ-Bereiche. Ungueltiger Wert faellt
+    mit Warnung auf den Standard zurueck, statt beim Start abzustuerzen."""
+    raw = os.environ.get(env_name, default)
+    try:
+        start_s, end_s = raw.split("-", 1)
+        start, end = int(start_s), int(end_s)
+        if start > end:
+            raise ValueError("start > end")
+        return start, end
+    except ValueError:
+        print(f"[app] WARNUNG: {env_name}={raw!r} ungueltig (erwartet 'start-end'), nutze Standard {default!r}.")
+        start_s, end_s = default.split("-", 1)
+        return int(start_s), int(end_s)
+
+
+# Feste IP-Bereiche (letztes Oktett) je Client-Typ innerhalb des WG-Subnetzes -
+# "Client bereitstellen" schlaegt je gewaehltem Typ die naechste freie IP aus
+# dem passenden Bereich vor (siehe provisioning.suggest_free_ip()), statt
+# irgendeine freie IP im gesamten Subnetz zu nehmen. Ueberschreibbar, falls
+# ein Deployment eine andere Aufteilung als diese (aus einer echten
+# Produktiv-Config abgeleitete) Standardaufteilung nutzt.
+IP_RANGE_SERVER = _parse_ip_range("IP_RANGE_SERVER", "2-50")
+IP_RANGE_ROUTER = _parse_ip_range("IP_RANGE_ROUTER", "100-150")
+IP_RANGE_CLIENT = _parse_ip_range("IP_RANGE_CLIENT", "201-245")
+IP_RANGES_BY_KIND = {"server": IP_RANGE_SERVER, "router": IP_RANGE_ROUTER, "client": IP_RANGE_CLIENT}
+
 BUILTIN_SERVICES = [
     # name, protocol, port  (port=None -> alle Ports)
     ("SSH", "tcp", 22),

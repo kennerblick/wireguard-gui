@@ -24,27 +24,65 @@ def test_fetch_wg_interface_info_parses_address_and_listen_port(monkeypatch):
     assert info == {"address": "10.250.0.1/24", "listen_port": "51820"}
 
 
-def test_suggest_free_ip_skips_used_addresses(monkeypatch, tmp_path):
+def test_suggest_free_ip_skips_used_addresses_within_kind_range(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
     db.init_db()
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("INSERT INTO clients (wg_ip, label, restricted) VALUES ('10.250.0.2', 'a', 1)")
+    conn.execute("INSERT INTO clients (wg_ip, label, restricted) VALUES ('10.250.0.201', 'a', 1)")
     conn.commit()
 
-    monkeypatch.setattr(
-        wireguard, "fetch_wg_interface_info", lambda: {"address": "10.250.0.1/29"}
-    )
+    monkeypatch.setattr(wireguard, "fetch_wg_interface_info", lambda: {"address": "10.250.0.1/24"})
     monkeypatch.setattr(
         wireguard,
         "fetch_wg_peers_from_config",
-        lambda: [{"name": "x", "pubkey": "k", "allowed_ips": "10.250.0.3/32", "actual_ip": None}],
+        lambda: [{"name": "x", "pubkey": "k", "allowed_ips": "10.250.0.202/32", "actual_ip": None}],
     )
 
-    ip, err = provisioning.suggest_free_ip(conn)
+    ip, err = provisioning.suggest_free_ip(conn, kind="client")
     assert err is None
-    # .1 = Interface selbst, .2 = DB-Client, .3 = Peer laut Config -> .4 ist frei
-    assert ip == "10.250.0.4"
+    # .201 = DB-Client, .202 = Peer laut Config -> .203 ist die naechste freie
+    # IP im Client-Bereich (Standard 201-245).
+    assert ip == "10.250.0.203"
+    conn.close()
+
+
+def test_suggest_free_ip_uses_separate_range_per_kind(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+    db.init_db()
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    monkeypatch.setattr(wireguard, "fetch_wg_interface_info", lambda: {"address": "10.250.0.1/24"})
+    monkeypatch.setattr(wireguard, "fetch_wg_peers_from_config", lambda: [])
+
+    server_ip, err = provisioning.suggest_free_ip(conn, kind="server")
+    assert err is None
+    assert server_ip == "10.250.0.2"
+
+    router_ip, err = provisioning.suggest_free_ip(conn, kind="router")
+    assert err is None
+    assert router_ip == "10.250.0.100"
+
+    client_ip, err = provisioning.suggest_free_ip(conn, kind="client")
+    assert err is None
+    assert client_ip == "10.250.0.201"
+    conn.close()
+
+
+def test_suggest_free_ip_reports_error_when_kind_range_exhausted(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+    db.init_db()
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    # /29 ist zu klein, um die (Standard-)Client-IPs .201-.245 ueberhaupt zu
+    # enthalten - Bereich gilt als komplett ausgeschoepft statt irgendeine
+    # andere freie Adresse im Subnetz vorzuschlagen.
+    monkeypatch.setattr(wireguard, "fetch_wg_interface_info", lambda: {"address": "10.250.0.1/29"})
+    monkeypatch.setattr(wireguard, "fetch_wg_peers_from_config", lambda: [])
+
+    ip, err = provisioning.suggest_free_ip(conn, kind="client")
+    assert ip is None
+    assert "client-Bereich" in err
     conn.close()
 
 
