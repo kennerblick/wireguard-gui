@@ -95,7 +95,7 @@ fi
 mkdir -p /etc/wireguard
 chmod 700 /etc/wireguard
 
-if [ -f /etc/wireguard/privatekey ]; then
+if [ -s /etc/wireguard/privatekey ] && wg pubkey < /etc/wireguard/privatekey > /etc/wireguard/publickey 2>/dev/null; then
   echo "Vorhandenes Schluesselpaar gefunden, wird wiederverwendet."
 else
   umask 077

@@ -121,6 +121,21 @@ def test_render_linux_script_without_syslog_host_omits_block():
     assert "rsyslog" not in script
 
 
+def test_render_linux_script_validates_reused_private_key_before_trusting_it():
+    # In Produktion aufgetreten: eine bereits vorhandene, aber leere/kaputte
+    # /etc/wireguard/privatekey (Ueberbleibsel eines fehlgeschlagenen
+    # frueheren Versuchs) wurde nur auf blosse Existenz geprueft ("-f") und
+    # damit blind wiederverwendet - "wg-quick up" scheiterte danach mit
+    # "Line unrecognized: `PrivateKey='" (leerer Wert). Reuse muss zusaetzlich
+    # pruefen, dass sich daraus tatsaechlich ein Public Key ableiten laesst.
+    script = provisioning.render_linux_script(
+        "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24", None
+    )
+    assert "[ -s /etc/wireguard/privatekey ]" in script
+    assert "wg pubkey < /etc/wireguard/privatekey > /etc/wireguard/publickey" in script
+    assert "[ -f /etc/wireguard/privatekey ]" not in script
+
+
 def test_render_windows_script_substitutes_tokens():
     script = provisioning.render_windows_script(
         "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24"
