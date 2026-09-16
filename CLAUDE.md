@@ -243,16 +243,11 @@ jeweiligen Client aus.
   Fehlt der Kommentar, fällt die UI auf IP bzw. Client-Bezeichnung zurück.
   **`peer_own_ip(peer)`** ermittelt die eigene Tunnel-IP eines Peers: bei
   einem gewöhnlichen Peer (`AllowedIPs = ip/32`) einfach die erste Adresse
-  aus `AllowedIPs`, bevorzugt aber eine explizite `#IP: x.x.x.x`-Kommentarzeile
-  im `[Peer]`-Block, falls vorhanden. Das ist notwendig für Peers mit
-  weiterreichendem Zugriff (`AllowedIPs` deckt ein ganzes Subnetz ab, z.B.
-  ein Admin-Rechner mit Zugriff auf alle anderen Peers) - dort wäre "erste
-  Adresse aus AllowedIPs" sonst die Netzwerk-Adresse (z.B. `10.250.0.0` bei
-  `AllowedIPs = 10.250.0.0/24`), nicht die tatsächliche eigene IP. Bug
-  gefunden beim ersten "Peers importieren" auf einer echten Config mit
-  genau so einem Peer. Alle Stellen, die frueher `allowed_ips` selbst
-  parsten (`peer_lookup_maps()`, `import_peers_from_config()`,
-  `suggest_free_ip()`), nutzen jetzt einheitlich `peer_own_ip()`.
+  aus `AllowedIPs`; nur wenn diese selbst mehrdeutig ist (siehe Folgebug
+  unten), zaehlt ersatzweise eine explizite `#IP: x.x.x.x`-Kommentarzeile im
+  `[Peer]`-Block. Alle Stellen, die frueher `allowed_ips` selbst parsten
+  (`peer_lookup_maps()`, `import_peers_from_config()`, `suggest_free_ip()`),
+  nutzen jetzt einheitlich `peer_own_ip()`.
   **Folgebug (in Produktion aufgetreten):** die urspruengliche Fallback-Logik
   nahm bei fehlendem `#IP:`-Kommentar trotzdem blind "erste Adresse aus
   AllowedIPs" - bei `AllowedIPs = 10.250.0.0/24` also woertlich die
@@ -274,6 +269,21 @@ jeweiligen Client aus.
   Berechtigungen-Seite ein Inline-Formular an der Tunnel-IP
   (`/clients/<id>/wg_ip/set`, `routes/permissions.py`), das die alte
   Firewall-Chain zurueckbaut und unter der korrigierten IP neu aufbaut.
+  **Zweiter Folgebug (ebenfalls in Produktion aufgetreten):** `peer_own_ip()`
+  bevorzugte den `#IP:`-Kommentar ursprünglich IMMER, wenn er vorhanden war -
+  auch wenn `AllowedIPs` (z.B. `.../32`) bereits eindeutig war. Bei einem
+  Peer mit versehentlich falsch gepflegtem Kommentar (dort stand der
+  WireGuard-*Endpoint* - die oeffentliche Internet-Adresse - statt der
+  Tunnel-IP) ueberschrieb der Tippfehler damit einen an sich korrekten,
+  eindeutigen `/32`-Wert; Symptom: "Verwaltete Netze" meldete "Peer nicht in
+  der Ziel-Config gefunden", weil die aus dem (falschen) Kommentar berechnete
+  IP nicht mehr zur in der DB gespeicherten `wg_ip` passte. Die Praezedenz
+  ist jetzt umgekehrt: `AllowedIPs` gewinnt immer, wenn es selbst eindeutig
+  ist (`/32`, oder eine breitere Maske mit einer Host- statt Netzwerk-Adresse
+  geschrieben); der `#IP:`-Kommentar zaehlt nur noch als Ersatz fuer den
+  echt mehrdeutigen Fall, fuer den er urspruenglich gedacht war - so kann ein
+  ueberfluessiger, fehlerhafter Kommentar eine bereits verlaessliche
+  `AllowedIPs`-Angabe nicht mehr verfaelschen.
 - **Netzplan-Seite** (`/netzplan`, rein lesend): SVG-Graph
   (`build_netzplan_data()`) mit einem zentralen WG-Server-Knoten
   (`config.WG_SERVER_TUNNEL_IP`), Clients auf einem aeusseren Ring

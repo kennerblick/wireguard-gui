@@ -62,6 +62,17 @@ def test_peer_own_ip_falls_back_to_allowed_ips_when_no_explicit_ip():
     assert wireguard.peer_own_ip(peer) == "10.250.0.5"
 
 
+def test_peer_own_ip_prefers_unambiguous_allowed_ips_over_wrong_comment():
+    # In Produktion aufgetreten: "#IP:"-Kommentar versehentlich mit dem
+    # WireGuard-Endpoint (oeffentliche Internet-Adresse) statt der Tunnel-IP
+    # gepflegt, waehrend AllowedIPs = <richtige-ip>/32 bereits eindeutig und
+    # korrekt war. Ein Kommentar, der fuer den eindeutigen Fall gar nicht
+    # gebraucht wird, darf eine bereits verlaessliche AllowedIPs-Angabe nicht
+    # verfaelschen.
+    peer = {"allowed_ips": "10.250.0.103/32", "actual_ip": "213.211.242.74"}
+    assert wireguard.peer_own_ip(peer) == "10.250.0.103"
+
+
 def test_peer_own_ip_accepts_host_address_with_wide_mask():
     # Geschriebene Adresse ist ein echter Host (nicht die Netzwerk-Adresse
     # von 10.250.0.0/24) - sicher verwendbar, auch ohne "#IP:"-Kommentar.

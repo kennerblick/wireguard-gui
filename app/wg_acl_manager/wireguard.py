@@ -169,32 +169,37 @@ def fetch_wg_peers_from_config():
 def peer_own_ip(peer: dict):
     """Ermittelt die tatsaechliche eigene Tunnel-IP eines Peer-Eintrags.
 
-    Bevorzugt eine explizite "#IP: x.x.x.x"-Kommentarzeile (siehe
-    fetch_wg_peers_from_config()); ohne die wird die erste Adresse aus
-    AllowedIPs genommen - das ist bei einem gewoehnlichen Peer
-    (AllowedIPs = eigene-ip/32, oder z.B. eigene-ip/24) korrekt. Ist die
-    geschriebene Adresse jedoch selbst die Netzwerk-Adresse einer breiteren
-    CIDR (z.B. AllowedIPs = 10.250.0.0/24 bei einem Admin-Rechner mit
-    weiterreichendem Zugriff), steckt darin KEINE Information ueber die
-    tatsaechliche eigene IP - ein import mit dieser Netzwerk-Adresse als
-    "eigene IP" waere schlicht falsch (kein Geraet hat diese Adresse) und
-    wuerde in der App unbemerkt zu nie greifenden Firewall-Regeln fuehren.
-    Fuer diesen Fall gibt es None zurueck statt zu raten - der Aufrufer muss
-    dann die explizite "#IP:"-Kommentarzeile einfordern.
+    Nimmt bevorzugt die erste Adresse aus AllowedIPs - das ist bei einem
+    gewoehnlichen Peer (AllowedIPs = eigene-ip/32, oder z.B. eigene-ip/24)
+    korrekt UND die tatsaechlich vom Kernel fuers Routing benutzte, damit per
+    Definition verlaessliche Angabe. Nur wenn die geschriebene Adresse selbst
+    die Netzwerk-Adresse einer breiteren CIDR ist (z.B. AllowedIPs =
+    10.250.0.0/24 bei einem Admin-Rechner mit weiterreichendem Zugriff) UND
+    steckt darin KEINE Information ueber die tatsaechliche eigene IP - dann,
+    und nur dann, zaehlt ersatzweise eine explizite "#IP: x.x.x.x"-
+    Kommentarzeile (siehe fetch_wg_peers_from_config()). Ohne verwertbare
+    AllowedIPs-Angabe und ohne Kommentar gibt es None zurueck statt zu raten.
+
+    Bewusst NICHT umgekehrt (Kommentar immer bevorzugen, AllowedIPs nur als
+    Fallback): in Produktion aufgetreten, dass ein "#IP:"-Kommentar versehentlich
+    den WireGuard-*Endpoint* (die oeffentliche Internet-Adresse des Peers)
+    statt dessen Tunnel-IP enthielt, waehrend AllowedIPs = <richtige-ip>/32
+    bereits eindeutig und korrekt war - mit "Kommentar gewinnt immer" haette
+    dieser Tippfehler eine an sich verlaessliche Angabe stillschweigend
+    ueberschrieben. Ein "#IP:"-Kommentar, der nicht fuer den mehrdeutigen Fall
+    gebraucht wird, hat so keine Chance, eine bereits eindeutige AllowedIPs-
+    Angabe zu verfaelschen.
     """
-    if peer.get("actual_ip"):
-        return peer["actual_ip"]
     first_allowed = (peer.get("allowed_ips") or "").split(",")[0].strip()
-    if not first_allowed:
-        return None
-    host_ip = first_allowed.split("/")[0]
-    try:
-        net = ipaddress.ip_network(first_allowed, strict=False)
-    except ValueError:
-        return host_ip
-    if net.num_addresses > 1 and host_ip == str(net.network_address):
-        return None
-    return host_ip
+    if first_allowed:
+        host_ip = first_allowed.split("/")[0]
+        try:
+            net = ipaddress.ip_network(first_allowed, strict=False)
+        except ValueError:
+            net = None
+        if net is None or net.num_addresses == 1 or host_ip != str(net.network_address):
+            return host_ip
+    return peer.get("actual_ip") or None
 
 
 def peer_lookup_maps():
