@@ -62,6 +62,23 @@ def test_peer_own_ip_falls_back_to_allowed_ips_when_no_explicit_ip():
     assert wireguard.peer_own_ip(peer) == "10.250.0.5"
 
 
+def test_peer_own_ip_accepts_host_address_with_wide_mask():
+    # Geschriebene Adresse ist ein echter Host (nicht die Netzwerk-Adresse
+    # von 10.250.0.0/24) - sicher verwendbar, auch ohne "#IP:"-Kommentar.
+    peer = {"allowed_ips": "10.250.0.201/24", "actual_ip": None}
+    assert wireguard.peer_own_ip(peer) == "10.250.0.201"
+
+
+def test_peer_own_ip_returns_none_for_ambiguous_network_address():
+    # Geschriebene Adresse IST die Netzwerk-Adresse einer breiteren CIDR
+    # (typisch bei einem Admin-Rechner mit Zugriff auf alle Peers) - ohne
+    # "#IP:"-Kommentar laesst sich die tatsaechliche eigene IP nicht sicher
+    # ermitteln, das darf NICHT stillschweigend zur (falschen) Netzwerk-
+    # Adresse fuehren.
+    peer = {"allowed_ips": "10.250.0.0/24", "actual_ip": None}
+    assert wireguard.peer_own_ip(peer) is None
+
+
 def test_fetch_wg_peers_from_config_empty_on_failure(monkeypatch):
     monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (False, "no such file"))
     assert wireguard.fetch_wg_peers_from_config() == []

@@ -122,13 +122,45 @@ AllowedIPs = 10.250.0.12/32, 192.168.5.0/24
 """
     monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (True, sample_config))
 
-    imported, skipped = acl.import_peers_from_config(conn)
+    imported, skipped, ambiguous = acl.import_peers_from_config(conn)
     assert imported == 1
     assert skipped == 0
+    assert ambiguous == []
 
     client_id = conn.execute("SELECT id FROM clients WHERE wg_ip = '10.250.0.12'").fetchone()["id"]
     cidrs = {r["cidr"] for r in networks.list_client_networks(conn, client_id)}
     assert cidrs == {"192.168.5.0/24"}
+    conn.close()
+
+
+def test_import_peers_from_config_skips_ambiguous_own_ip(monkeypatch, tmp_path):
+    """Ein Peer mit weiterreichendem Zugriff (AllowedIPs deckt ein ganzes
+    Subnetz ab) und ohne explizite '#IP:'-Kommentarzeile darf NICHT mit der
+    Netzwerk-Adresse als (falscher) eigener IP importiert werden - siehe
+    wireguard.peer_own_ip()."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+    db.init_db()
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    sample_config = """
+[Interface]
+PrivateKey = xxx
+Address = 10.250.0.1/24
+ListenPort = 51820
+
+[Peer]
+#PC-Admin
+PublicKey = pubkey-admin==
+AllowedIPs = 10.250.0.0/24
+"""
+    monkeypatch.setattr(wireguard, "run_on_target", lambda script, timeout=15: (True, sample_config))
+
+    imported, skipped, ambiguous = acl.import_peers_from_config(conn)
+    assert imported == 0
+    assert skipped == 0
+    assert ambiguous == ["PC-Admin"]
+    assert conn.execute("SELECT COUNT(*) AS n FROM clients").fetchone()["n"] == 0
     conn.close()
 
 

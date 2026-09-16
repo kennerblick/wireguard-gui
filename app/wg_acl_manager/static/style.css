@@ -57,6 +57,16 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 2rem 4rem; }
     margin-bottom: 0.75rem;
 }
 .perm-card-title { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
+.wg-ip-form { margin-top: 0; gap: 0.3rem; }
+.wg-ip-input {
+    width: 118px;
+    background: #0f1419;
+    border: 1px solid #4a5568;
+    border-radius: 5px;
+    padding: 0.25rem 0.4rem;
+    color: #e2e8f0;
+    font-size: 0.82rem;
+}
 .perm-card-unrestricted { border-left-color: #744210; }
 
 .perm-card-actions { display: flex; gap: 0.5rem; }

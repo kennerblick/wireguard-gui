@@ -233,6 +233,27 @@ jeweiligen Client aus.
   genau so einem Peer. Alle Stellen, die frueher `allowed_ips` selbst
   parsten (`peer_lookup_maps()`, `import_peers_from_config()`,
   `suggest_free_ip()`), nutzen jetzt einheitlich `peer_own_ip()`.
+  **Folgebug (in Produktion aufgetreten):** die urspruengliche Fallback-Logik
+  nahm bei fehlendem `#IP:`-Kommentar trotzdem blind "erste Adresse aus
+  AllowedIPs" - bei `AllowedIPs = 10.250.0.0/24` also woertlich die
+  Netzwerk-Adresse `10.250.0.0` als "eigene IP". Der Import legte damit
+  einen Client mit `wg_ip = 10.250.0.0` an; die daraus gebaute
+  `WGACL_10.250.0.0`-Chain (`-s 10.250.0.0`) traf nie den tatsaechlichen
+  Traffic des Peers (der ja von seiner echten IP kommt), Regeln griffen
+  also nie, ohne dass die UI das erkennen liess. `peer_own_ip()` prueft
+  jetzt per `ipaddress.ip_network(..., strict=False)`, ob die geschriebene
+  Adresse selbst die Netzwerk-Adresse ist (`net.network_address ==
+  host_ip`) - nur dann ist sie mehrdeutig und die Funktion gibt `None`
+  zurueck, statt zu raten; ein Host mit weiterreichender Maske (z.B.
+  `10.250.0.201/24`) wird weiterhin korrekt erkannt. `import_peers_from_
+  config()` importiert solche mehrdeutigen Peers NICHT mehr, sondern
+  meldet sie namentlich zurueck (dritter Rueckgabewert `ambiguous`) - die
+  Route `/clients/import` zeigt dafuer eine eigene Fehlermeldung mit der
+  Aufforderung, `#IP: x.x.x.x` im `[Peer]`-Block zu ergaenzen. Fuer
+  bereits (vor diesem Fix) falsch importierte Clients gibt es auf der
+  Berechtigungen-Seite ein Inline-Formular an der Tunnel-IP
+  (`/clients/<id>/wg_ip/set`, `routes/permissions.py`), das die alte
+  Firewall-Chain zurueckbaut und unter der korrigierten IP neu aufbaut.
 - **Netzplan-Seite** (`/netzplan`, rein lesend): SVG-Graph
   (`build_netzplan_data()`) mit einem zentralen WG-Server-Knoten
   (`config.WG_SERVER_TUNNEL_IP`), Clients auf einem aeusseren Ring

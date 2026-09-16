@@ -100,7 +100,18 @@ def import_peers_from_config(db):
     Rule-Ziel-Vorschlag (networks.set_client_networks()). Das aendert nichts
     an der Firewall auf dem Server, nur an dieser App's eigener Datenhaltung.
 
-    Gibt (importiert, uebersprungen) zurueck.
+    Peers, deren eigene IP sich nicht sicher ermitteln laesst (AllowedIPs
+    deckt ein ganzes Subnetz ab, ohne dass eine explizite "#IP:"-
+    Kommentarzeile die tatsaechliche Adresse nennt - siehe
+    wireguard.peer_own_ip()), werden NICHT importiert und stattdessen in
+    einer eigenen Liste gemeldet, statt versehentlich mit der Netzwerk-
+    Adresse als (falscher) eigener IP angelegt zu werden - eine daraus
+    gebaute Firewall-Regel wuerde nie den tatsaechlichen Traffic dieses
+    Peers treffen.
+
+    Gibt (importiert, uebersprungen, mehrdeutig) zurueck - mehrdeutig ist
+    eine Liste von Anzeigenamen (Name-Kommentar oder Pubkey-Praefix) der
+    nicht importierten Peers.
     """
     wg_network = None
     address = wireguard.fetch_wg_interface_info().get("address")
@@ -113,9 +124,12 @@ def import_peers_from_config(db):
     existing_ips = {row["wg_ip"] for row in db.execute("SELECT wg_ip FROM clients").fetchall()}
     imported = 0
     skipped = 0
+    ambiguous = []
     for peer in wireguard.fetch_wg_peers_from_config():
         ip = wireguard.peer_own_ip(peer)
         if not ip:
+            pubkey = peer.get("pubkey") or "?"
+            ambiguous.append(peer.get("name") or f"{pubkey[:16]}...")
             continue
         if ip in existing_ips:
             skipped += 1
@@ -131,7 +145,7 @@ def import_peers_from_config(db):
         existing_ips.add(ip)
         imported += 1
     db.commit()
-    return imported, skipped
+    return imported, skipped, ambiguous
 
 
 def build_ip_label_map(db):

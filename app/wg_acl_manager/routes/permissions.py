@@ -6,6 +6,7 @@ routes/tags.py - hier wird eine Gruppe nur noch als Regel-Ziel ausgewaehlt.
 """
 
 import datetime
+import ipaddress
 import json
 import sqlite3
 
@@ -90,7 +91,7 @@ def permissions():
 @app.route("/clients/import", methods=["POST"])
 def import_peers():
     db = get_db()
-    imported, skipped = acl.import_peers_from_config(db)
+    imported, skipped, ambiguous = acl.import_peers_from_config(db)
     if imported:
         flash(
             f"{imported} Peer(s) aus der WireGuard-Config importiert (eingeschraenkt, ohne Regeln - "
@@ -101,15 +102,29 @@ def import_peers():
         )
     else:
         flash(f"Keine neuen Peers gefunden ({skipped} bereits vorhanden, oder Config nicht lesbar).", "success")
+    if ambiguous:
+        flash(
+            f"{len(ambiguous)} Peer(s) NICHT importiert, da ihre eigene Tunnel-IP nicht sicher "
+            f"ermittelbar ist (AllowedIPs deckt ein ganzes Subnetz ab, z.B. ein Admin-Rechner mit "
+            f"Zugriff auf alle Peers): {', '.join(ambiguous)}. Bitte im [Peer]-Block dieser Clients auf "
+            f"dem Zielserver eine zweite Kommentarzeile '#IP: x.x.x.x' mit der tatsaechlichen eigenen "
+            f"IP ergaenzen und danach erneut importieren.",
+            "error",
+        )
     return redirect(url_for("permissions"))
 
 
 @app.route("/clients/add", methods=["POST"])
 def add_client():
     db = get_db()
-    wg_ip = request.form["wg_ip"].strip()
+    wg_ip_raw = request.form["wg_ip"].strip()
     label = request.form["label"].strip()
     restricted = 1 if request.form.get("restricted") == "on" else 0
+    try:
+        wg_ip = str(ipaddress.ip_address(wg_ip_raw))
+    except ValueError:
+        flash(f"Ungueltige Tunnel-IP: {wg_ip_raw!r}", "error")
+        return redirect(url_for("permissions"))
     try:
         db.execute(
             "INSERT INTO clients (wg_ip, label, restricted) VALUES (?, ?, ?)",
@@ -138,6 +153,51 @@ def toggle_client(client_id):
         flash(f"{client['label']}: Einschraenkung {'aktiviert' if new_val else 'deaktiviert'} und angewendet.", "success")
     else:
         flash(f"{client['label']}: Aenderung gespeichert, aber Anwenden fehlgeschlagen: {out}", "error")
+    return redirect(url_for("permissions"))
+
+
+@app.route("/clients/<int:client_id>/wg_ip/set", methods=["POST"])
+def set_client_wg_ip(client_id):
+    """Korrigiert die gespeicherte Tunnel-IP eines Clients nachtraeglich -
+    z.B. wenn "Peers importieren" vor der Ambiguitaets-Erkennung (siehe
+    wireguard.peer_own_ip()) faelschlich eine Netzwerk-Adresse statt der
+    echten Peer-IP uebernommen hatte. Baut die Firewall-Chain unter der
+    alten IP zurueck und unter der neuen frisch auf - ein reines Update der
+    DB-Spalte wuerde eine verwaiste Chain unter der alten (falschen) IP
+    zuruecklassen, die nie zum tatsaechlichen Traffic passt."""
+    db = get_db()
+    client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        flash("Client nicht gefunden.", "error")
+        return redirect(url_for("permissions"))
+
+    raw = request.form.get("wg_ip", "").strip()
+    try:
+        new_ip = str(ipaddress.ip_address(raw))
+    except ValueError:
+        flash(f"Ungueltige Tunnel-IP: {raw!r}", "error")
+        return redirect(url_for("permissions"))
+
+    old_ip = client["wg_ip"]
+    if new_ip == old_ip:
+        flash("Keine Aenderung.", "success")
+        return redirect(url_for("permissions"))
+
+    hook_chain = firewall.detect_hook_chain()
+    wireguard.run_on_target(firewall.build_remove_script(old_ip, hook_chain))
+    try:
+        db.execute("UPDATE clients SET wg_ip = ? WHERE id = ?", (new_ip, client_id))
+        db.commit()
+    except sqlite3.IntegrityError:
+        flash(f"Ein Client mit IP {new_ip} existiert bereits.", "error")
+        return redirect(url_for("permissions"))
+
+    client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    ok, out = acl.apply_client(db, client)
+    if ok:
+        flash(f"{client['label']}: Tunnel-IP von {old_ip} auf {new_ip} geaendert und angewendet.", "success")
+    else:
+        flash(f"{client['label']}: IP geaendert, aber Anwenden fehlgeschlagen: {out}", "error")
     return redirect(url_for("permissions"))
 
 

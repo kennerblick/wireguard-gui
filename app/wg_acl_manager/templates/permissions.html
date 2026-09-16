@@ -20,7 +20,10 @@
         <div class="perm-card-header">
             <div class="perm-card-title">
                 <strong>{{ client.label }}</strong>
-                <span class="mono">{{ client.wg_ip }}</span>
+                <form method="post" action="{{ url_for('set_client_wg_ip', client_id=client.id) }}" class="inline-form wg-ip-form">
+                    <input type="text" name="wg_ip" value="{{ client.wg_ip }}" class="mono wg-ip-input" title="Tunnel-IP">
+                    <button type="submit" class="btn btn-tiny" title="Tunnel-IP aendern (baut die Firewall-Chain unter der neuen IP neu auf)">&check;</button>
+                </form>
                 {% if not client.restricted %}
                     <span class="badge badge-warn">Uneingeschraenkt (volles Mesh)</span>
                 {% else %}
