@@ -173,7 +173,23 @@ $NetworkCidr = "@@NETWORK_CIDR@@"
 $ConfigFile = "$ConfigDir\\$Label.conf"
 
 if (-not (Test-Path $WgExe)) {
-    Write-Error "wg.exe nicht gefunden unter $WgExe - ist WireGuard for Windows installiert?"
+    Write-Host "WireGuard for Windows nicht gefunden - versuche automatische Installation..."
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "Installiere per winget (WireGuard.WireGuard)..."
+        winget install --id WireGuard.WireGuard -e --silent --accept-package-agreements --accept-source-agreements
+    } else {
+        Write-Host "winget nicht verfuegbar - lade offiziellen Installer direkt von download.wireguard.com herunter..."
+        $InstallerPath = Join-Path $env:TEMP "wireguard-installer.exe"
+        Invoke-WebRequest -Uri "https://download.wireguard.com/windows-client/wireguard-installer.exe" -OutFile $InstallerPath
+        # Der offizielle Installer unterstuetzt keinen dokumentierten Silent-Schalter -
+        # oeffnet sich ggf. als Dialog, den ein Admin einmal bestaetigen muss.
+        Start-Process -FilePath $InstallerPath -Wait
+        Remove-Item $InstallerPath -ErrorAction SilentlyContinue
+    }
+}
+
+if (-not (Test-Path $WgExe)) {
+    Write-Error "wg.exe immer noch nicht gefunden unter $WgExe - automatische Installation fehlgeschlagen oder abgebrochen. Bitte WireGuard for Windows manuell installieren und dieses Skript erneut ausfuehren."
     exit 1
 }
 

@@ -146,6 +146,15 @@ def test_render_windows_script_substitutes_tokens():
     assert '$HubEndpoint = "203.0.113.5:51820"' in script
 
 
+def test_render_windows_script_auto_installs_wireguard_if_missing():
+    script = provisioning.render_windows_script(
+        "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24"
+    )
+    assert "winget install" in script
+    assert "WireGuard.WireGuard" in script
+    assert "download.wireguard.com/windows-client/wireguard-installer.exe" in script
+
+
 def test_render_mikrotik_script_splits_endpoint_host_and_port():
     script = provisioning.render_mikrotik_script(
         "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24", "10.250.0.1"
