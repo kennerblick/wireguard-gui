@@ -146,6 +146,19 @@ def test_render_windows_script_substitutes_tokens():
     assert '$HubEndpoint = "203.0.113.5:51820"' in script
 
 
+def test_render_windows_script_explains_service_restart_for_later_changes():
+    # In Produktion aufgetreten: Tunnel laeuft per /installtunnelservice als
+    # Windows-Dienst, taucht in der WireGuard-Tray-App nicht zum Neustarten
+    # auf - eine spaeter geaenderte AllowedIPs-Zeile (z.B. neu freigegebenes
+    # Netz) wurde dadurch nie von Windows als Route uebernommen, ohne dass
+    # klar war, wie der Dienst stattdessen neu gestartet werden kann.
+    script = provisioning.render_windows_script(
+        "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24"
+    )
+    assert "@@" not in script
+    assert "Restart-Service -Name 'WireGuardTunnel`$$Label'" in script
+
+
 def test_render_windows_script_auto_installs_wireguard_if_missing():
     script = provisioning.render_windows_script(
         "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24"

@@ -231,6 +231,14 @@ Write-Host ">>> Diesen Public Key in wg-acl-manager unter 'Client bereitstellen'
 Write-Host ""
 Write-Host "$PublicKey"
 Write-Host "================================================================"
+Write-Host ""
+Write-Host "HINWEIS: Dieser Tunnel laeuft als Windows-DIENST (WireGuardTunnel`$$Label),"
+Write-Host "nicht als normale Verbindung in der WireGuard-Tray-App - taucht dort"
+Write-Host "moeglicherweise nicht zum An-/Ausschalten auf. Wird die Config spaeter"
+Write-Host "geaendert (z.B. AllowedIPs bei einem neu freigegebenen Netz), als"
+Write-Host "Administrator neu starten, damit Windows die Aenderung (inkl. Routen)"
+Write-Host "uebernimmt:"
+Write-Host "  Restart-Service -Name 'WireGuardTunnel`$$Label'"
 """
 
 MIKROTIK_SCRIPT_TEMPLATE = """# MikroTik WireGuard Setup
