@@ -1,4 +1,10 @@
 {% macro panel(client, my_networks, rules_by_client, all_tags, services_flat, redirect_to) %}
+    {% if client.system in ("windows", "linux") %}
+    <p class="muted small">
+        <a href="{{ url_for('client_allowedips_script', client_id=client.id) }}" class="link-btn">&#8595; AllowedIPs-Update-Skript ({{ "PowerShell" if client.system == "windows" else "Shell" }})</a>
+        - lokale Config auf diesem Client aktualisieren, wenn neue Netze freigegeben wurden.
+    </p>
+    {% endif %}
     {% if client.kind == "router" or my_networks %}
     <div class="perm-card-networks">
         <span class="muted small">Verwaltete Netze (LAN hinter diesem Client, z.B. MikroTik):</span>

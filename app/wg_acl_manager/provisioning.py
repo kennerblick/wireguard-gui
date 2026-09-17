@@ -235,10 +235,14 @@ Write-Host ""
 Write-Host "HINWEIS: Dieser Tunnel laeuft als Windows-DIENST (WireGuardTunnel`$$Label),"
 Write-Host "nicht als normale Verbindung in der WireGuard-Tray-App - taucht dort"
 Write-Host "moeglicherweise nicht zum An-/Ausschalten auf. Wird die Config spaeter"
-Write-Host "geaendert (z.B. AllowedIPs bei einem neu freigegebenen Netz), als"
-Write-Host "Administrator neu starten, damit Windows die Aenderung (inkl. Routen)"
-Write-Host "uebernimmt:"
-Write-Host "  Restart-Service -Name 'WireGuardTunnel`$$Label'"
+Write-Host "geaendert (z.B. AllowedIPs bei einem neu freigegebenen Netz), reicht ein"
+Write-Host "Dienst-Neustart NICHT: WireGuard liest die Config nur beim (Neu-)Anlegen"
+Write-Host "des Dienstes aus der Datei, nicht bei jedem Start. Stattdessen als"
+Write-Host "Administrator den Dienst neu anlegen:"
+Write-Host "  & '$WireGuardExe' /uninstalltunnelservice $Label"
+Write-Host "  & '$WireGuardExe' /installtunnelservice '$ConfigFile'"
+Write-Host "(In wg-acl-manager kann dafuer pro Client ein fertiges Update-Skript"
+Write-Host "heruntergeladen werden.)"
 """
 
 MIKROTIK_SCRIPT_TEMPLATE = """# MikroTik WireGuard Setup
@@ -316,6 +320,85 @@ def render_windows_script(label, ip, hub_pubkey, hub_endpoint, network_cidr):
         HUB_PUBKEY=hub_pubkey,
         HUB_ENDPOINT=hub_endpoint,
         NETWORK_CIDR=network_cidr,
+    )
+
+
+WINDOWS_ALLOWEDIPS_UPDATE_TEMPLATE = """# update-allowedips-@@LABEL@@.ps1
+# Aktualisiert die AllowedIPs des Tunnels "@@LABEL@@" (z.B. weil ein neues
+# Netz freigegeben wurde) und legt den Windows-Dienst neu an, damit
+# WireGuard die geaenderte Config (inkl. Routen) uebernimmt.
+#
+# WICHTIG: Ein blosser Dienst-Neustart reicht NICHT - WireGuard liest die
+# .conf-Datei nur beim (Neu-)Anlegen des Dienstes ein, nicht bei jedem
+# Start. Deshalb: deinstallieren, Config aktualisieren, neu installieren.
+#
+# Als Administrator ausfuehren: .\\update-allowedips-@@LABEL@@.ps1
+
+$WireGuardExe = 'C:\\Program Files\\WireGuard\\wireguard.exe'
+$ConfigFile = 'C:\\WireGuard-Configs\\@@LABEL@@.conf'
+$Label = '@@LABEL@@'
+$NewAllowedIPs = '@@ALLOWED_IPS@@'
+
+if (-not (Test-Path $ConfigFile)) {
+    Write-Error "Config nicht gefunden: $ConfigFile"
+    exit 1
+}
+
+(Get-Content $ConfigFile) -replace '^AllowedIPs\\s*=.*', "AllowedIPs = $NewAllowedIPs" | Set-Content $ConfigFile -Encoding ASCII
+Write-Host "AllowedIPs in $ConfigFile aktualisiert: $NewAllowedIPs"
+
+Write-Host "Lege Dienst neu an, damit WireGuard die Aenderung uebernimmt..."
+& $WireGuardExe /uninstalltunnelservice $Label
+Start-Sleep -Seconds 2
+& $WireGuardExe /installtunnelservice $ConfigFile
+
+Write-Host "Fertig."
+"""
+
+
+def render_windows_allowedips_update(label, allowed_ips_csv):
+    return _fill_template(
+        WINDOWS_ALLOWEDIPS_UPDATE_TEMPLATE,
+        LABEL=label,
+        ALLOWED_IPS=allowed_ips_csv,
+    )
+
+
+LINUX_ALLOWEDIPS_UPDATE_TEMPLATE = """#!/bin/bash
+set -e
+
+### update-allowedips.sh - aktualisiert AllowedIPs im lokalen WireGuard-
+### Tunnel (z.B. weil ein neues Netz freigegeben wurde) und laedt ihn neu,
+### damit die (neuen) Routen uebernommen werden. Mit sudo/als root ausfuehren.
+
+CONF=/etc/wireguard/wg0.conf
+NEW_ALLOWED="@@ALLOWED_IPS@@"
+
+if [ ! -f "$CONF" ]; then
+  echo "FEHLER: $CONF nicht gefunden."
+  exit 1
+fi
+
+sed -i "s|^AllowedIPs = .*|AllowedIPs = $NEW_ALLOWED|" "$CONF"
+echo "AllowedIPs aktualisiert: $NEW_ALLOWED"
+
+echo "Lade Tunnel neu..."
+if systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+  systemctl restart wg-quick@wg0
+else
+  wg-quick down wg0 2>/dev/null || true
+  wg-quick up wg0
+fi
+
+echo "Fertig."
+wg show wg0
+"""
+
+
+def render_linux_allowedips_update(allowed_ips_csv):
+    return _fill_template(
+        LINUX_ALLOWEDIPS_UPDATE_TEMPLATE,
+        ALLOWED_IPS=allowed_ips_csv,
     )
 
 

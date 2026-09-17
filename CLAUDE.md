@@ -413,6 +413,34 @@ jeweiligen Client aus.
   ueber `PROVISION_SYSLOG_PORT_LINUX`/`PROVISION_SYSLOG_PORT_MIKROTIK`
   (Host wird aus der Ziel-Config abgeleitet, keine eigene Env-Variable
   noetig).
+- **AllowedIPs-Update-Skript** (`/clients/<id>/allowedips-script`, nur fuer
+  `system in (windows, linux)`, Download-Link auf der Berechtigungen-Karte):
+  wird noetig, sobald nach der Erstregistrierung neue verwaltete Netze
+  hinzukommen - die lokale Client-Config muss dann ebenfalls die
+  erweiterten AllowedIPs bekommen, sonst routet das Client-Betriebssystem
+  gar nicht erst zum Tunnel. Berechnet `AllowedIPs` als Mesh-Subnetz plus
+  ALLE aktuell bekannten verwalteten Netze systemweit (`networks.
+  all_networks_with_client()`) - bewusst nicht auf die fuer diesen Client
+  per ACL erlaubten Netze eingeschraenkt, da die serverseitige
+  `WGACL_<ip>`-Chain ohnehin per DROP blockt, was nicht erlaubt ist (eine
+  vorhandene Route ohne passende ACL-Regel ist also ein No-Op, kein
+  Sicherheitsproblem) und das Skript so bei jeder Netz-Aenderung einfach
+  neu heruntergeladen werden kann, ohne Client-spezifische ACL-Logik
+  nachzubilden.
+  **Wichtiger Unterschied Linux vs. Windows-Dienst-Tunnel:** Linux
+  (`wg-quick`) liest `/etc/wireguard/wg0.conf` bei jedem Start neu ein -
+  `sed` + `systemctl restart wg-quick@wg0` (Fallback `wg-quick down/up`)
+  reicht. Ein per `wireguard.exe /installtunnelservice` als Windows-Dienst
+  installierter Tunnel liest die `.conf`-Datei dagegen NUR beim (Neu-)
+  Anlegen des Dienstes - der Dienst speichert intern eine eigene,
+  verschluesselte Kopie und ignoriert die Quelldatei bei jedem weiteren
+  Start/Restart. Ein blosser `Restart-Service` uebernimmt eine geaenderte
+  AllowedIPs-Zeile deshalb NICHT (in Produktion so aufgefallen: Route blieb
+  nach Config-Edit + Dienst-Neustart weiterhin nicht in `route print`). Der
+  einzige Weg ist Deinstallieren + Neuinstallieren des Dienstes
+  (`/uninstalltunnelservice <Label>` dann `/installtunnelservice <ConfigFile>`),
+  entsprechend implementiert in `render_windows_allowedips_update()` und im
+  Hinweistext am Ende von `render_windows_script()`.
 - **Generische Variablennamen**: `ISURFER_*` (an einen konkreten Server
   gebunden) wurde zu `WG_SERVER_*` umbenannt
   (`WG_SERVER_PUBKEY`/`_ENDPOINT`/`_TUNNEL_IP`/`_SSH_USER`).

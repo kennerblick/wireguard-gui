@@ -146,17 +146,20 @@ def test_render_windows_script_substitutes_tokens():
     assert '$HubEndpoint = "203.0.113.5:51820"' in script
 
 
-def test_render_windows_script_explains_service_restart_for_later_changes():
+def test_render_windows_script_explains_service_reinstall_for_later_changes():
     # In Produktion aufgetreten: Tunnel laeuft per /installtunnelservice als
-    # Windows-Dienst, taucht in der WireGuard-Tray-App nicht zum Neustarten
-    # auf - eine spaeter geaenderte AllowedIPs-Zeile (z.B. neu freigegebenes
-    # Netz) wurde dadurch nie von Windows als Route uebernommen, ohne dass
-    # klar war, wie der Dienst stattdessen neu gestartet werden kann.
+    # Windows-Dienst und liest seine Config nur beim (Neu-)Anlegen des
+    # Dienstes ein (aus einem intern gespeicherten Abbild), nicht bei jedem
+    # Start - ein blosser Restart-Service uebernimmt eine spaeter geaenderte
+    # AllowedIPs-Zeile (z.B. neu freigegebenes Netz) NICHT. Der Hinweis muss
+    # daher deinstallieren+neu installieren empfehlen, nicht nur neu starten.
     script = provisioning.render_windows_script(
         "Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24"
     )
     assert "@@" not in script
-    assert "Restart-Service -Name 'WireGuardTunnel`$$Label'" in script
+    assert "/uninstalltunnelservice $Label" in script
+    assert "/installtunnelservice '$ConfigFile'" in script
+    assert "Restart-Service" not in script
 
 
 def test_render_windows_script_auto_installs_wireguard_if_missing():
@@ -166,6 +169,26 @@ def test_render_windows_script_auto_installs_wireguard_if_missing():
     assert "winget install" in script
     assert "WireGuard.WireGuard" in script
     assert "download.wireguard.com/windows-client/wireguard-installer.exe" in script
+
+
+def test_render_windows_allowedips_update_substitutes_tokens_and_reinstalls_service():
+    script = provisioning.render_windows_allowedips_update("pcphilipp", "10.250.0.0/24,192.168.3.0/24")
+    assert "@@" not in script
+    assert "$ConfigFile = 'C:\\WireGuard-Configs\\pcphilipp.conf'" in script
+    assert "$NewAllowedIPs = '10.250.0.0/24,192.168.3.0/24'" in script
+    # Muss den Dienst neu anlegen (nicht nur neu starten), da WireGuard die
+    # Config sonst nicht neu einliest - siehe render_windows_script-Hinweis.
+    assert "/uninstalltunnelservice $Label" in script
+    assert "/installtunnelservice $ConfigFile" in script
+    assert "Restart-Service" not in script
+
+
+def test_render_linux_allowedips_update_substitutes_tokens_and_reloads_tunnel():
+    script = provisioning.render_linux_allowedips_update("10.250.0.0/24,192.168.3.0/24")
+    assert "@@" not in script
+    assert 'NEW_ALLOWED="10.250.0.0/24,192.168.3.0/24"' in script
+    assert "systemctl restart wg-quick@wg0" in script
+    assert "wg-quick up wg0" in script
 
 
 def test_render_mikrotik_script_splits_endpoint_host_and_port():

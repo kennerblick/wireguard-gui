@@ -112,6 +112,52 @@ def provision_script():
     )
 
 
+@app.route("/clients/<int:client_id>/allowedips-script")
+def client_allowedips_script(client_id):
+    db = get_db()
+    client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        flash("Client nicht gefunden.", "error")
+        return redirect(url_for("permissions"))
+    if client["system"] not in ("windows", "linux"):
+        flash(
+            f"{client['label']}: Kein Update-Skript verfuegbar (System "
+            f"{client['system'] or 'unbekannt'!r} - nur Windows/Linux unterstuetzt).",
+            "error",
+        )
+        return redirect(url_for("permissions"))
+
+    info = wireguard.fetch_wg_interface_info()
+    address = info.get("address")
+    mesh_cidr = None
+    if address:
+        try:
+            mesh_cidr = str(ipaddress.ip_interface(address).network)
+        except ValueError:
+            mesh_cidr = None
+    if not mesh_cidr:
+        flash("Konnte Mesh-Subnetz des Ziel-Servers nicht ermitteln.", "error")
+        return redirect(url_for("permissions"))
+
+    managed_cidrs = sorted({row["cidr"] for row in networks.all_networks_with_client(db)})
+    allowed_ips_csv = ",".join([mesh_cidr] + managed_cidrs)
+
+    if client["system"] == "windows":
+        content = provisioning.render_windows_allowedips_update(client["label"], allowed_ips_csv)
+        filename = f"update-allowedips-{client['label']}.ps1"
+        mimetype = "text/plain"
+    else:
+        content = provisioning.render_linux_allowedips_update(allowed_ips_csv)
+        filename = f"update-allowedips-{client['label']}.sh"
+        mimetype = "text/x-shellscript"
+
+    return Response(
+        content,
+        mimetype=mimetype,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.route("/provision/register", methods=["POST"])
 def provision_register():
     db = get_db()
