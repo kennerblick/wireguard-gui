@@ -46,6 +46,7 @@ def init_db():
             label TEXT NOT NULL,
             restricted INTEGER NOT NULL DEFAULT 1,
             kind TEXT NOT NULL DEFAULT 'client' CHECK (kind IN ('server', 'router', 'client')),
+            system TEXT CHECK (system IS NULL OR system IN ('windows', 'linux', 'mikrotik')),
             notes TEXT DEFAULT ''
         );
 
@@ -141,4 +142,16 @@ def run_migrations(db):
         db.execute(
             "ALTER TABLE clients ADD COLUMN kind TEXT NOT NULL DEFAULT 'client' "
             "CHECK (kind IN ('server', 'router', 'client'))"
+        )
+
+    if "system" not in client_columns:
+        # "System" (Windows/Linux/MikroTik) ist bewusst UNABHAENGIG von "kind"
+        # (Server/Router/Client): kind beschreibt die Rolle in der Netz-
+        # Organisation (Verwaltete Netze etc.), system die Art der WG-Konfiguration
+        # (welches Provisionierungs-Skript/Setup) - ein Server kann Linux ODER
+        # Windows sein, waehrend ein Router in der Praxis fast immer MikroTik
+        # ist. NULL = unbekannt/nicht gesetzt (z.B. importierte Alt-Clients).
+        db.execute(
+            "ALTER TABLE clients ADD COLUMN system TEXT "
+            "CHECK (system IS NULL OR system IN ('windows', 'linux', 'mikrotik'))"
         )

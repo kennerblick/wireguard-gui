@@ -11,6 +11,45 @@ import math
 from . import config, firewall, networks, tags, wireguard
 
 
+def build_rules_context(db):
+    """Baut die fuer Regel-Anzeige/-Bearbeitung noetigen Daten (Regeln pro
+    Client, verfuegbare Dienste/Gruppen, bekannte Ziele fuers Datalist) -
+    gemeinsam genutzt von der Berechtigungen-Seite (Karten) und dem
+    Dashboard (Berechtigungen-Dialog je System), damit beide exakt dieselbe
+    Regel-Bearbeitung zeigen koennen, ohne die Abfragen zu duplizieren."""
+    rules = db.execute(
+        """
+        SELECT r.id, r.client_id, r.dest_ip, r.dest_tag_id, t.name AS tag_name,
+               s.name AS service_name, s.protocol, s.port
+        FROM rules r
+        JOIN services s ON r.service_id = s.id
+        LEFT JOIN tags t ON t.id = r.dest_tag_id
+        ORDER BY r.dest_ip
+        """
+    ).fetchall()
+    rules_by_client = {}
+    for r in rules:
+        rules_by_client.setdefault(r["client_id"], []).append(r)
+
+    services_flat = db.execute("SELECT * FROM services ORDER BY is_builtin DESC, name").fetchall()
+    all_tags = tags.list_tags(db)
+
+    ip_labels = build_ip_label_map(db)
+    known_destinations = sorted(ip_labels.items(), key=lambda kv: kv[1])
+    known_networks = [
+        (row["cidr"], f"LAN hinter {row['client_label']}")
+        for row in networks.all_networks_with_client(db)
+    ]
+
+    return {
+        "rules_by_client": rules_by_client,
+        "services_flat": services_flat,
+        "all_tags": all_tags,
+        "known_destinations": known_destinations,
+        "known_networks": known_networks,
+    }
+
+
 def log_apply(db, client_id, success, output):
     db.execute(
         "INSERT INTO apply_log (client_id, timestamp, success, output) VALUES (?, ?, ?, ?)",

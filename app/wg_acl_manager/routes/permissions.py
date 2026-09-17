@@ -15,7 +15,22 @@ from flask import flash, redirect, render_template, request, url_for
 from .. import acl, app, config, firewall, networks, tags, wireguard
 from ..db import get_db
 
-GROUP_LABELS = [("router", "Router"), ("server", "Externe Server"), ("client", "Clients")]
+GROUP_LABELS = [("router", "MikroTik-Router"), ("server", "Externe Server"), ("client", "Clients")]
+
+_REDIRECT_TARGETS = {"permissions", "index"}
+
+
+def _redirect_next(default="permissions"):
+    """Redirect-Ziel nach einer Formular-Aktion - Formulare aus dem
+    Berechtigungen-Dialog auf dem Dashboard (siehe templates/
+    _permission_panel.html) schicken ein verstecktes "next"-Feld mit, damit
+    man nach dem Speichern dort landet, wo man war, statt immer auf
+    /permissions umgeleitet zu werden. Nur bekannte, feste Ziele zulaessig
+    (kein offener Redirect ueber Nutzereingaben)."""
+    target = request.form.get("next", default)
+    if target not in _REDIRECT_TARGETS:
+        target = default
+    return redirect(url_for(target))
 
 
 @app.route("/permissions")
@@ -25,30 +40,14 @@ def permissions():
     groups = {"router": [], "server": [], "client": []}
     for c in clients:
         groups[c["kind"]].append(c)
-    rules = db.execute(
-        """
-        SELECT r.id, r.client_id, r.dest_ip, r.dest_tag_id, t.name AS tag_name,
-               s.name AS service_name, s.protocol, s.port
-        FROM rules r
-        JOIN services s ON r.service_id = s.id
-        LEFT JOIN tags t ON t.id = r.dest_tag_id
-        ORDER BY r.dest_ip
-        """
-    ).fetchall()
-    rules_by_client = {}
-    for r in rules:
-        rules_by_client.setdefault(r["client_id"], []).append(r)
 
-    services_flat = db.execute("SELECT * FROM services ORDER BY is_builtin DESC, name").fetchall()
+    rules_ctx = acl.build_rules_context(db)
+    rules_by_client = rules_ctx["rules_by_client"]
+    services_flat = rules_ctx["services_flat"]
+    all_tags = rules_ctx["all_tags"]
+    known_destinations = rules_ctx["known_destinations"]
+    known_networks = rules_ctx["known_networks"]
 
-    ip_labels = acl.build_ip_label_map(db)
-    known_destinations = sorted(ip_labels.items(), key=lambda kv: kv[1])
-    known_networks = [
-        (row["cidr"], f"LAN hinter {row['client_label']}")
-        for row in networks.all_networks_with_client(db)
-    ]
-
-    all_tags = tags.list_tags(db)
     client_tag_ids = {c["id"]: tags.get_client_tag_ids(db, c["id"]) for c in clients}
     client_tag_names = {
         c["id"]: sorted(t["name"] for t in all_tags if t["id"] in client_tag_ids[c["id"]])
@@ -140,6 +139,9 @@ def add_client():
     kind = request.form.get("kind", "client").strip().lower()
     if kind not in ("server", "router", "client"):
         kind = "client"
+    system = request.form.get("system", "").strip().lower() or None
+    if system not in (None, "windows", "linux", "mikrotik"):
+        system = None
     try:
         wg_ip = str(ipaddress.ip_address(wg_ip_raw))
     except ValueError:
@@ -150,8 +152,8 @@ def add_client():
         return redirect(url_for("permissions"))
     try:
         db.execute(
-            "INSERT INTO clients (wg_ip, label, restricted, kind) VALUES (?, ?, ?, ?)",
-            (wg_ip, label, restricted, kind),
+            "INSERT INTO clients (wg_ip, label, restricted, kind, system) VALUES (?, ?, ?, ?, ?)",
+            (wg_ip, label, restricted, kind, system),
         )
         db.commit()
         flash(f"Client {label} ({wg_ip}) hinzugefuegt.", "success")
@@ -162,11 +164,13 @@ def add_client():
 
 @app.route("/clients/<int:client_id>/kind/set", methods=["POST"])
 def set_client_kind(client_id):
-    """Setzt den Typ (Server/Router/Client) eines Clients - u.a. massgeblich
-    dafuer, ob er "Verwaltete Netze" pflegen darf (siehe routes/networks.py
-    fuer die serverseitige Absicherung, die das zusaetzlich zur UI
-    durchsetzt) und aus welchem IP-Bereich "Client bereitstellen" ihm eine
-    IP vorschlaegt (siehe provisioning.suggest_free_ip())."""
+    """Setzt die Gruppe (Server/MikroTik-Router/Client) eines Clients - die
+    Organisation der WG-Verbindung: u.a. massgeblich dafuer, ob er
+    "Verwaltete Netze" pflegen darf (siehe routes/networks.py fuer die
+    serverseitige Absicherung, die das zusaetzlich zur UI durchsetzt) und
+    aus welchem IP-Bereich "Client bereitstellen" ihm eine IP vorschlaegt
+    (siehe provisioning.suggest_free_ip()). Unabhaengig von "system" (Art
+    der WG-Konfiguration, siehe set_client_system())."""
     db = get_db()
     client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
     if not client:
@@ -179,6 +183,27 @@ def set_client_kind(client_id):
     db.execute("UPDATE clients SET kind = ? WHERE id = ?", (kind, client_id))
     db.commit()
     flash(f"{client['label']}: Typ auf {kind!r} gesetzt.", "success")
+    return redirect(url_for("permissions"))
+
+
+@app.route("/clients/<int:client_id>/system/set", methods=["POST"])
+def set_client_system(client_id):
+    """Setzt das System (Windows/Linux/MikroTik) eines Clients - die Art der
+    WG-Konfiguration/des Provisionierungs-Skripts, unabhaengig von "kind"
+    (Organisation der Verbindung, siehe set_client_kind()). Leerer Wert =
+    unbekannt/nicht gesetzt."""
+    db = get_db()
+    client = db.execute("SELECT * FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not client:
+        flash("Client nicht gefunden.", "error")
+        return redirect(url_for("permissions"))
+    system = request.form.get("system", "").strip().lower() or None
+    if system not in (None, "windows", "linux", "mikrotik"):
+        flash(f"Ungueltiges System: {system!r}", "error")
+        return redirect(url_for("permissions"))
+    db.execute("UPDATE clients SET system = ? WHERE id = ?", (system, client_id))
+    db.commit()
+    flash(f"{client['label']}: System auf {system or 'unbekannt'!r} gesetzt.", "success")
     return redirect(url_for("permissions"))
 
 
@@ -312,14 +337,14 @@ def add_rule():
             dest_tag_id = int(dest_tag_raw)
         except ValueError:
             flash("Ungueltige Gruppe.", "error")
-            return redirect(url_for("permissions"))
+            return _redirect_next()
         dest_ip = ""  # Sentinel: Ziel ist eine Gruppe, siehe db.run_migrations()
     else:
         dest_ip_raw = request.form.get("dest_ip", "").strip()
         dest_ip = firewall.validate_dest_ip(dest_ip_raw)
         if dest_ip is None:
             flash(f"Ungueltige Ziel-IP/CIDR: {dest_ip_raw!r}", "error")
-            return redirect(url_for("permissions"))
+            return _redirect_next()
         dest_tag_id = None
 
     db.execute(
@@ -333,7 +358,7 @@ def add_rule():
         flash("Regel hinzugefuegt und angewendet.", "success")
     else:
         flash(f"Regel gespeichert, aber Anwenden fehlgeschlagen: {out}", "error")
-    return redirect(url_for("permissions"))
+    return _redirect_next()
 
 
 @app.route("/rules/<int:rule_id>/delete", methods=["POST"])
@@ -341,7 +366,7 @@ def delete_rule(rule_id):
     db = get_db()
     rule = db.execute("SELECT * FROM rules WHERE id = ?", (rule_id,)).fetchone()
     if not rule:
-        return redirect(url_for("permissions"))
+        return _redirect_next()
     client_id = rule["client_id"]
     db.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
     db.commit()
@@ -351,7 +376,7 @@ def delete_rule(rule_id):
         flash("Regel entfernt und angewendet.", "success")
     else:
         flash(f"Regel entfernt, aber Anwenden fehlgeschlagen: {out}", "error")
-    return redirect(url_for("permissions"))
+    return _redirect_next()
 
 
 @app.route("/apply/<int:client_id>", methods=["POST"])

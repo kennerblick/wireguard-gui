@@ -7,10 +7,10 @@ routes/tags.py."""
 
 from flask import render_template
 
-from .. import app, config, firewall, networks, wireguard
+from .. import acl, app, config, firewall, networks, wireguard
 from ..db import get_db
 
-GROUP_LABELS = [("router", "Router"), ("server", "Externe Server"), ("client", "Clients")]
+GROUP_LABELS = [("router", "MikroTik-Router"), ("server", "Externe Server"), ("client", "Clients")]
 
 
 @app.route("/")
@@ -22,9 +22,12 @@ def index():
 
     clients = db.execute("SELECT * FROM clients ORDER BY label").fetchall()
     client_by_ip = {c["wg_ip"]: c for c in clients}
-    client_networks = {
-        c["id"]: networks.list_client_networks(db, c["id"]) for c in clients if c["kind"] == "router"
-    }
+    client_networks = {c["id"]: networks.list_client_networks(db, c["id"]) for c in clients}
+
+    # Fuer den "Berechtigungen"-Dialog je System (Klick auf eine Dashboard-
+    # Zeile) - dieselben Daten, die auch die Berechtigungen-Seite fuer die
+    # Karten braucht, siehe acl.build_rules_context().
+    rules_ctx = acl.build_rules_context(db)
 
     groups = {"router": [], "server": [], "client": []}
     unmatched = []
@@ -60,4 +63,9 @@ def index():
         groups=groups,
         unmatched=unmatched,
         client_networks=client_networks,
+        rules_by_client=rules_ctx["rules_by_client"],
+        services_flat=rules_ctx["services_flat"],
+        all_tags=rules_ctx["all_tags"],
+        known_destinations=rules_ctx["known_destinations"],
+        known_networks=rules_ctx["known_networks"],
     )

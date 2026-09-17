@@ -152,6 +152,7 @@ th { color: #a0aec0; font-weight: 500; }
 .badge-group { background: #2c5282; color: #bee3f8; margin-left: 0; }
 .badge-router { background: #285e61; color: #81e6d9; }
 .badge-count { background: #2d3748; color: #a0aec0; margin-left: 0.5rem; }
+.badge-system { background: #44337a; color: #d6bcfa; }
 
 .status-group, .perm-group {
     border: 1px solid #2d3748;
@@ -188,6 +189,40 @@ th { color: #a0aec0; font-weight: 500; }
     flex-wrap: wrap;
     background: #1a2332;
     border-color: #285e61;
+}
+
+.link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #63b3ed;
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: inherit;
+    font-family: inherit;
+}
+.link-btn:hover { color: #90cdf4; }
+
+dialog.perm-dialog {
+    background: #1a2332;
+    color: #e2e8f0;
+    border: 1px solid #2d3748;
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    max-width: 700px;
+    width: 92vw;
+}
+dialog.perm-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.6);
+}
+.perm-dialog-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #2d3748;
 }
 
 .btn {

@@ -119,6 +119,7 @@ def provision_register():
     ip_raw = request.form.get("ip", "").strip()
     pubkey_raw = request.form.get("pubkey", "").strip()
     platform = request.form.get("platform", "").strip().lower()
+    system = platform if platform in ("windows", "linux", "mikrotik") else None
     kind = request.form.get("kind", "client").strip().lower()
     if kind not in ("server", "router", "client"):
         kind = "client"
@@ -152,8 +153,8 @@ def provision_register():
 
     try:
         db.execute(
-            "INSERT INTO clients (wg_ip, label, restricted, kind) VALUES (?, ?, 1, ?)",
-            (str(ip_obj), label, kind),
+            "INSERT INTO clients (wg_ip, label, restricted, kind, system) VALUES (?, ?, 1, ?, ?)",
+            (str(ip_obj), label, kind, system),
         )
         db.commit()
         client_id = db.execute("SELECT id FROM clients WHERE wg_ip = ?", (str(ip_obj),)).fetchone()["id"]

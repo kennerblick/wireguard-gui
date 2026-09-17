@@ -320,8 +320,8 @@ jeweiligen Client aus.
   ausschließlich auf der Gruppen-Seite statt (siehe unten) - hier wird
   eine Gruppe nur noch als Regel-Ziel ausgewählt.
   **Gruppierung nach `clients.kind`** (`routes/permissions.py:GROUP_LABELS`,
-  Reihenfolge Router/Externe Server/Clients): Client-Karten stehen nicht
-  mehr in einer einzigen flachen Liste, sondern je Typ in einem
+  Reihenfolge MikroTik-Router/Externe Server/Clients): Client-Karten stehen
+  nicht mehr in einer einzigen flachen Liste, sondern je Typ in einem
   einklappbaren `<details>`-Block (`.perm-group`) mit Anzahl-Badge -
   gleiches Muster wie beim Dashboard (siehe dort), macro-basiert
   (`{% macro client_card(client) %}` in `permissions.html`, damit die
@@ -333,6 +333,38 @@ jeweiligen Client aus.
   nur zur Einordnung. Ein Textfeld filtert client-seitig per JS ueber
   `data-filter`-Attribute (Label/IP/Gruppen-Namen) und klappt beim Tippen
   nur Gruppen mit Treffern auf.
+  **"Kategorie" vs. "System" - zwei unabhaengige Achsen** (bewusst getrennt
+  von der oben beschriebenen ACL-"Gruppen"/Tags-Funktion, um Namenskollision
+  zu vermeiden - in der UI daher "Kategorie" statt "Gruppe" fuer `kind`):
+  `clients.kind` (Server/Router/Client) beschreibt die Organisation der
+  WG-Verbindung (Netz-Rolle), `clients.system` (`windows`/`linux`/`mikrotik`,
+  nullable, additive Migration ohne Backfill) beschreibt die Art der
+  WG-Konfiguration/des Provisionierungs-Skripts - ein Server kann Linux
+  ODER Windows sein, unabhaengig von seiner Kategorie. Bei "Client
+  bereitstellen" wird `system` automatisch aus der gewaehlten Plattform
+  gesetzt (`routes/provisioning.py:provision_register()`, `platform`-Werte
+  entsprechen 1:1 den `system`-Enum-Werten); manuell aenderbar per
+  Dropdown je Client (`/clients/<id>/system/set`) und beim Anlegen
+  (`/clients/add`). Als `.badge-system` auf Dashboard/Berechtigungen
+  angezeigt, sonst rein informativ (kein Einfluss auf ACL-Logik).
+  **Berechtigungen-Dialog auf dem Dashboard**: Klick auf einen Peer-Namen
+  (`.link-btn`) oeffnet ein natives `<dialog>` (`.perm-dialog`,
+  `showModal()`/`method="dialog"` zum Schliessen - kein JS-Modal-Framework)
+  mit denselben Regel-Bearbeitungs-Elementen wie auf der Berechtigungen-
+  Seite. Beide Seiten teilen sich dafuer `templates/_permission_panel.html`
+  (`{% macro panel(client, my_networks, rules_by_client, all_tags,
+  services_flat, redirect_to) %}`, per `{% import ... as perm_panel %}`
+  eingebunden) sowie `acl.build_rules_context(db)` fuer die noetigen
+  Abfragen (Regeln/Dienste/Gruppen/bekannte Ziele) - vermeidet doppelte
+  SQL-Logik zwischen `routes/dashboard.py` und `routes/permissions.py`.
+  Jedes Formular im Panel traegt ein verstecktes `next`-Feld
+  (`"index"`/`"permissions"`); `routes/permissions.py:_redirect_next()`
+  (importiert von `routes/networks.py`, siehe dort - Vorsicht: NICHT
+  `next` als lokalen Variablennamen verwenden, verdeckt sonst das
+  eingebaute `next()` in `set_client_networks()`) liest es aus einer
+  festen Werte-Menge aus, damit z.B. eine Regel-Aenderung aus dem
+  Dashboard-Dialog wieder auf dem Dashboard landet statt auf
+  /permissions - kein offener Redirect ueber Nutzereingaben.
 - **Unit-Tests** (`tests/`, `pytest`) für Script-Generierung
   (`build_apply_script`/`build_remove_script`), Eingabevalidierung und
   Hook-Erkennung; CI via `.github/workflows/tests.yml`.

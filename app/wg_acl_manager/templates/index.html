@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_permission_panel.html" as perm_panel %}
 {% block content %}
 
 <section class="panel">
@@ -25,7 +26,9 @@
 {% if not wg_error %}
 <section class="panel">
     <input type="text" id="status-filter" class="mono" placeholder="Filtern nach Name/IP/Endpoint..." style="width: 100%; margin-bottom: 0.5rem;">
+    <p class="muted small">Name anklicken, um Berechtigungen zu sehen und zu aendern.</p>
 
+    {% set system_labels = {"windows": "Windows", "linux": "Linux", "mikrotik": "MikroTik"} %}
     {% for kind, label in group_labels %}
     <details class="status-group" open>
         <summary>{{ label }} <span class="badge badge-count">{{ groups[kind] | length }}</span></summary>
@@ -39,7 +42,10 @@
             <tbody>
                 {% for p in groups[kind] %}
                 <tr class="status-row" data-filter="{{ (p.name or p.client.label) | lower }} {{ p.client.wg_ip }} {{ p.endpoint | lower }}">
-                    <td>{{ p.name or p.client.label }}</td>
+                    <td>
+                        <button type="button" class="link-btn" onclick="document.getElementById('perm-dialog-{{ p.client.id }}').showModal()">{{ p.name or p.client.label }}</button>
+                        {% if p.client.system %}<span class="badge badge-system">{{ system_labels[p.client.system] }}</span>{% endif %}
+                    </td>
                     <td class="mono small">{{ p.client.wg_ip }}</td>
                     <td>{{ p.endpoint }}</td>
                     <td>{{ "vor " ~ p.latest_handshake_secs_ago ~ "s" if p.latest_handshake_secs_ago is not none else "nie" }}</td>
@@ -55,6 +61,18 @@
                 {% endfor %}
             </tbody>
         </table>
+        {% for p in groups[kind] %}
+        <dialog id="perm-dialog-{{ p.client.id }}" class="perm-dialog">
+            <div class="perm-dialog-header">
+                <div>
+                    <strong>{{ p.client.label }}</strong>
+                    <span class="mono small">{{ p.client.wg_ip }}</span>
+                </div>
+                <form method="dialog"><button type="submit" class="btn btn-tiny">&times; Schliessen</button></form>
+            </div>
+            {{ perm_panel.panel(p.client, client_networks.get(p.client.id, []), rules_by_client, all_tags, services_flat, "index") }}
+        </dialog>
+        {% endfor %}
         {% endif %}
     </details>
     {% endfor %}
@@ -86,6 +104,16 @@
         </table>
     </details>
     {% endif %}
+
+    <datalist id="known-destinations">
+        <option value="any">
+        {% for ip, label in known_destinations %}
+        <option value="{{ ip }}">{{ label }}</option>
+        {% endfor %}
+        {% for cidr, label in known_networks %}
+        <option value="{{ cidr }}">{{ label }}</option>
+        {% endfor %}
+    </datalist>
 </section>
 
 <script>

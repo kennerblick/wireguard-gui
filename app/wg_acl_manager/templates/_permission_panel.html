@@ -1,0 +1,81 @@
+{% macro panel(client, my_networks, rules_by_client, all_tags, services_flat, redirect_to) %}
+    {% if client.kind == "router" or my_networks %}
+    <div class="perm-card-networks">
+        <span class="muted small">Verwaltete Netze (LAN hinter diesem Client, z.B. MikroTik):</span>
+        {% if client.kind != "router" %}
+        <span class="badge badge-warn">Kategorie ist nicht "MikroTik-Router" - nur Leeren moeglich</span>
+        {% endif %}
+        <form method="post" action="{{ url_for('set_client_networks', client_id=client.id) }}" class="inline-form">
+            <input type="hidden" name="next" value="{{ redirect_to }}">
+            <input type="text" name="networks" class="mono"
+                   value="{{ my_networks | map(attribute='cidr') | join(', ') }}"
+                   placeholder="z.B. 192.168.88.0/24, 192.168.5.0/24"
+                   {% if client.kind != "router" %}title="Erst Kategorie auf 'MikroTik-Router' setzen, um neue Netze einzutragen - Leeren geht immer."{% endif %}>
+            <button type="submit" class="btn btn-tiny">Speichern</button>
+        </form>
+    </div>
+    {% endif %}
+
+    {% if client.restricted %}
+    <table class="rules-table perm-rules-table">
+        <thead>
+            <tr><th>Ziel</th><th>Dienst</th><th>Protokoll / Port</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for rule in rules_by_client.get(client.id, []) %}
+            <tr>
+                <td class="mono">
+                    {% if rule.dest_tag_id %}
+                        <span class="badge badge-group">Gruppe: {{ rule.tag_name }}</span>
+                    {% else %}
+                        {{ rule.dest_ip }}
+                    {% endif %}
+                </td>
+                <td>{{ rule.service_name }}</td>
+                <td class="mono small">
+                    {% if rule.port %}{{ rule.protocol }}/{{ rule.port }}{% else %}alle{% endif %}
+                </td>
+                <td>
+                    <form method="post" action="{{ url_for('delete_rule', rule_id=rule.id) }}">
+                        <input type="hidden" name="next" value="{{ redirect_to }}">
+                        <button type="submit" class="btn btn-tiny btn-danger" title="Regel entfernen">&times;</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="empty-row">Keine Regeln - Client kann aktuell nirgendwo hin (nur DROP).</td></tr>
+            {% endfor %}
+            <tr class="rule-add-row">
+                <td colspan="4">
+                    <form method="post" action="{{ url_for('add_rule') }}" class="rule-add-form">
+                        <input type="hidden" name="client_id" value="{{ client.id }}">
+                        <input type="hidden" name="next" value="{{ redirect_to }}">
+                        <input type="text" name="dest_ip" class="mono" placeholder="Ziel-IP / CIDR / 'any'" list="known-destinations">
+                        <span class="muted small">oder</span>
+                        <select name="dest_tag_id">
+                            <option value="">— Gruppe waehlen —</option>
+                            {% for t in all_tags %}
+                            <option value="{{ t.id }}">Gruppe: {{ t.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <select name="service_id" required>
+                            {% for s in services_flat %}
+                            <option value="{{ s.id }}">{{ s.name }}{% if s.port %} ({{ s.protocol }}/{{ s.port }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-small btn-primary">+ Regel</button>
+                    </form>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <p class="muted small">
+        Ziel entweder als IP/CIDR (bzw. "any") ODER als Gruppe - nicht
+        beides. Bei einer Gruppe gilt die Regel fuer alle aktuellen
+        Mitglieder (Zuordnung unter "Gruppen"); Aenderungen wirken sich
+        erst nach erneutem "Anwenden" aus.
+    </p>
+    {% else %}
+    <p class="muted">Dieser Client ist nicht eingeschraenkt und nutzt die normale Mesh-Regel (Zugriff auf alle Peers).</p>
+    {% endif %}
+{% endmacro %}
