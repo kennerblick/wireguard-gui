@@ -4,90 +4,77 @@
 <section class="panel">
     <h2>Client bereitstellen</h2>
     <p class="muted small">
-        Halbautomatische Einrichtung eines neuen WireGuard-Clients in zwei
-        Schritten: (1) Config/Skript für den neuen Client generieren und auf
-        dem Zielgerät ausführen - der private Schlüssel wird dabei
-        <strong>nur lokal auf diesem Gerät erzeugt und verlässt es nie</strong>;
-        (2) den dabei ausgegebenen Public Key hier eintragen, um den Peer auf
-        dem WireGuard-Server zu registrieren.
+        Der private Schlüssel wird <strong>nur lokal auf dem neuen Gerät
+        erzeugt und verlässt es nie</strong> - erst der Public Key aus der
+        heruntergeladenen Anleitung wird hier zur Registrierung eingetragen.
     </p>
     {% if ip_error %}
     <p class="error-text">{{ ip_error }}</p>
     {% endif %}
+
     <form method="get" action="{{ url_for('provision') }}" class="inline-form">
-        <label for="kind-select">Typ (bestimmt den vorgeschlagenen IP-Bereich):</label>
+        <label for="kind-select">Typ:</label>
         <select name="kind" id="kind-select" onchange="this.form.submit()">
             <option value="client" {% if kind == "client" %}selected{% endif %}>Client</option>
             <option value="router" {% if kind == "router" %}selected{% endif %}>Router (verwaltet ein LAN dahinter)</option>
             <option value="server" {% if kind == "server" %}selected{% endif %}>Server</option>
         </select>
     </form>
-</section>
 
-<section class="panel">
-    <h2>Schritt 1: Config/Skript generieren</h2>
-    <form method="get" action="{{ url_for('provision_script') }}" class="inline-form">
-        <input type="text" name="label" placeholder="Name, z.B. Mitarbeiter Max" required>
-        <input type="text" name="ip" value="{{ suggested_ip or '' }}" placeholder="Tunnel-IP" required>
-        <select name="platform" required>
+    <form id="provision-form" class="inline-form" onsubmit="return false;">
+        <input type="text" id="p-label" name="label" placeholder="Name, z.B. Mitarbeiter Max" required>
+        <input type="text" id="p-ip" name="ip" value="{{ suggested_ip or '' }}" placeholder="Tunnel-IP (vorgeschlagen)" required>
+        <label for="p-platform">System:</label>
+        <select id="p-platform" name="platform" required onchange="toggleNetworks()">
             <option value="linux">Linux</option>
             <option value="windows">Windows</option>
             <option value="mikrotik">MikroTik</option>
         </select>
-        <input type="hidden" name="kind" value="{{ kind }}">
-        <input type="text" name="networks" placeholder="Verwaltete Netze, z.B. 192.168.88.0/24 (nur bei Typ Router, optional)">
-        <button type="submit" class="btn btn-primary">Herunterladen</button>
+        <input type="text" id="p-networks" name="networks" placeholder="Verwaltete Netze, z.B. 192.168.88.0/24 (mehrere durch Komma getrennt)">
+        <button type="button" class="btn btn-primary" onclick="downloadScript()">Anleitung herunterladen</button>
     </form>
-    <p class="muted small">
-        Vorgeschlagene IP ist die nächste freie im IP-Bereich des oben
-        gewählten Typs (Server/Router/Client haben getrennte Bereiche) - bei
-        Bedarf überschreiben. Linux: Bash-Skript auf dem neuen Rechner
-        mit <code>sudo</code> ausführen. Windows: PowerShell-Skript als
-        Administrator ausführen - installiert WireGuard für Windows bei
-        Bedarf automatisch (per <code>winget</code>, sonst per Download des
-        offiziellen Installers). MikroTik: Skript-Inhalt komplett ins RouterOS-Terminal
-        (Winbox oder SSH) einfügen. "Verwaltete Netze": falls der Router ein
-        eigenes LAN dahinter hat (z.B. <code>192.168.88.0/24</code>), hier
-        eintragen (mehrere durch Komma getrennt) - erzeugt die passenden
-        Firewall-Freigaben im Skript und wird in Schritt 2 automatisch in die
-        AllowedIPs des Peers auf dem Server übernommen, damit Rückverkehr zu
-        diesem Netz tatsächlich geroutet wird.
-    </p>
-</section>
 
-<section class="panel">
-    <h2>Schritt 2: Peer auf dem Server registrieren</h2>
-    <form method="post" action="{{ url_for('provision_register') }}" class="inline-form">
-        <input type="text" name="label" placeholder="Name (wie in Schritt 1)" required>
-        <input type="text" name="ip" placeholder="Tunnel-IP (wie in Schritt 1)" required>
-        <select name="platform">
-            <option value="linux">Linux</option>
-            <option value="windows">Windows</option>
-            <option value="mikrotik">MikroTik</option>
-        </select>
-        <select name="kind">
-            <option value="client" {% if kind == "client" %}selected{% endif %}>Client</option>
-            <option value="router" {% if kind == "router" %}selected{% endif %}>Router</option>
-            <option value="server" {% if kind == "server" %}selected{% endif %}>Server</option>
-        </select>
-        <input type="text" name="pubkey" placeholder="Public Key aus der Skript-Ausgabe" required class="mono">
-        <input type="text" name="networks" placeholder="Verwaltete Netze (wie in Schritt 1, optional)">
+    <form id="register-form" method="post" action="{{ url_for('provision_register') }}" class="inline-form" style="display: none;">
+        <input type="hidden" name="label" id="r-label">
+        <input type="hidden" name="ip" id="r-ip">
+        <input type="hidden" name="platform" id="r-platform">
+        <input type="hidden" name="kind" value="{{ kind }}">
+        <input type="hidden" name="networks" id="r-networks">
+        <input type="text" name="pubkey" placeholder="Public Key aus der Anleitung" required class="mono">
         <button type="submit" class="btn btn-primary">Registrieren</button>
     </form>
-    <p class="muted small">
-        Trägt den Peer live per <code>wg set</code> ein (wirkt sofort, ohne
-        Neustart) und hängt einen <code>[Peer]</code>-Block mit
-        <code>#Name</code>-Kommentar an die Server-Config an (damit er einen
-        Neustart übersteht). Legt zusätzlich einen eingeschränkten
-        Client-Datensatz ohne Regeln in dieser App an, mit dem hier gewählten
-        Typ (bei angegebenen "Verwalteten Netzen" automatisch "Router"), und
-        weist automatisch eine zur Plattform passende Gruppe zu (z.B.
-        "mikrotik") - unter "Gruppen" frei änderbar. "Verwaltete Netze"
-        (falls angegeben) werden zusätzlich zur eigenen Tunnel-IP in die
-        AllowedIPs dieses Peers auf dem Server aufgenommen und als
-        Rule-Ziel-Vorschlag hinterlegt - nachträglich änderbar über die
-        Client-Karte unter "Berechtigungen".
-    </p>
 </section>
+
+<script>
+(function () {
+    "use strict";
+    window.toggleNetworks = function () {
+        var mikrotik = document.getElementById("p-platform").value === "mikrotik";
+        document.getElementById("p-networks").style.display = mikrotik ? "" : "none";
+    };
+    window.downloadScript = function () {
+        var label = document.getElementById("p-label").value.trim();
+        var ip = document.getElementById("p-ip").value.trim();
+        var platform = document.getElementById("p-platform").value;
+        var networks = document.getElementById("p-networks").value.trim();
+        if (!label || !ip) {
+            alert("Bitte Name und IP ausfuellen.");
+            return;
+        }
+        var params = new URLSearchParams({
+            label: label, ip: ip, platform: platform,
+            kind: "{{ kind }}", networks: networks,
+        });
+        window.location = "{{ url_for('provision_script') }}?" + params.toString();
+
+        document.getElementById("r-label").value = label;
+        document.getElementById("r-ip").value = ip;
+        document.getElementById("r-platform").value = platform;
+        document.getElementById("r-networks").value = networks;
+        document.getElementById("register-form").style.display = "";
+    };
+    toggleNetworks();
+})();
+</script>
 
 {% endblock %}
