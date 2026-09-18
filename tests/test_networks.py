@@ -171,10 +171,19 @@ def test_set_peer_allowed_ips_rewrites_only_matching_peer_block(monkeypatch):
     ersetzt wird, alle anderen Peers/Zeilen unveraendert bleiben. "wg" selbst
     gibt es in dieser Sandbox nicht - dafuer ein No-Op-Stub vor den echten
     PATH haengen, nur der awk-Config-Rewrite wird real ausgefuehrt."""
+    import os
+
     iface = "wgtest"
-    conf_path = f"/etc/wireguard/{iface}.conf"
+    conf_dir = "/etc/wireguard"
+    conf_path = f"{conf_dir}/{iface}.conf"
     pubkey_a = base64.b64encode(b"a" * 32).decode()
     pubkey_b = base64.b64encode(b"b" * 32).decode()
+    # /etc/wireguard existiert nur, wenn wireguard-tools tatsaechlich
+    # installiert ist - auf einem frischen CI-Runner (oder dieser Sandbox)
+    # nicht der Fall. Fuer den Test selbst anlegen statt vorauszusetzen.
+    created_conf_dir = not os.path.isdir(conf_dir)
+    if created_conf_dir:
+        os.makedirs(conf_dir)
     with open(conf_path, "w") as f:
         f.write(
             "[Interface]\n"
@@ -193,7 +202,6 @@ def test_set_peer_allowed_ips_rewrites_only_matching_peer_block(monkeypatch):
         monkeypatch.setattr(config, "EXEC_MODE", "local")
         monkeypatch.setattr(config, "TARGET_WG_INTERFACE", iface)
 
-        import os
         import stat
 
         fake_bin = os.path.dirname(conf_path) + "/fakebin-" + iface
@@ -216,3 +224,5 @@ def test_set_peer_allowed_ips_rewrites_only_matching_peer_block(monkeypatch):
         import shutil
         os.remove(conf_path)
         shutil.rmtree(fake_bin, ignore_errors=True)
+        if created_conf_dir:
+            shutil.rmtree(conf_dir, ignore_errors=True)
