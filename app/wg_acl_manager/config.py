@@ -53,6 +53,9 @@ FLASK_SECRET = os.environ.get("FLASK_SECRET", "dev-secret-change-me")
 
 VALID_PROTOCOLS = {"tcp", "udp", "all"}
 SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9 _.\-()]{1,64}$")
+# Einzelner Port ("10006") oder Bereich ("2500-3300", wie ihn iptables --dport
+# als "start:end" erwartet - siehe firewall.build_apply_script()).
+SERVICE_PORT_RE = re.compile(r"^(\d{1,5})(?:-(\d{1,5}))?$")
 LABEL_RE = re.compile(r"^[A-Za-z0-9 _.\-()]{1,64}$")
 TAG_NAME_RE = re.compile(r"^[A-Za-z0-9 _.\-()]{1,64}$")
 
@@ -89,7 +92,7 @@ IP_RANGE_CLIENT = _parse_ip_range("IP_RANGE_CLIENT", "201-245")
 IP_RANGES_BY_KIND = {"server": IP_RANGE_SERVER, "router": IP_RANGE_ROUTER, "client": IP_RANGE_CLIENT}
 
 BUILTIN_SERVICES = [
-    # name, protocol, port  (port=None -> alle Ports)
+    # name, protocol, port  (port=None -> alle Ports; "start-end" -> Portbereich)
     ("SSH", "tcp", 22),
     ("RDP", "tcp", 3389),
     ("HTTPS-Alt (8443)", "tcp", 8443),
@@ -97,6 +100,11 @@ BUILTIN_SERVICES = [
     ("Proxmox VE", "tcp", 8006),
     ("HTTP", "tcp", 80),
     ("HTTPS", "tcp", 443),
+    # Veeam Agent -> Backupserver (VBR/Repository): VBR-Service/Agent-Kommunikation
+    # auf 10006, Data-Mover-Verbindung fuer die eigentliche Datenuebertragung auf
+    # dem Repository-/Gateway-Server im Bereich 2500-3300.
+    ("Veeam VBR", "tcp", 10006),
+    ("Veeam Data Mover", "tcp", "2500-3300"),
     ("Alle Ports", "all", None),
 ]
 

@@ -207,8 +207,10 @@ iptables-Grundkonfiguration.
    hängt von eurer tatsächlichen Firewall-Grundkonfiguration ab** - siehe
    "Wartung" → "Firewall-Regeln (Ist-Zustand)", nicht pauschal annehmen.
 4. **Dienste verwalten**: Unter "Dienste" eigene Ports/Protokolle
-   ergänzen, zusätzlich zu den mitgelieferten Standarddiensten (SSH, RDP,
-   HTTPS-Alt 8443, PostgreSQL, Proxmox VE, HTTP, HTTPS, "Alle Ports").
+   ergänzen (auch Portbereiche wie `2500-3300`), zusätzlich zu den
+   mitgelieferten Standarddiensten (SSH, RDP, HTTPS-Alt 8443, PostgreSQL,
+   Proxmox VE, HTTP, HTTPS, Veeam VBR (10006), Veeam Data Mover
+   (2500-3300), "Alle Ports").
 5. **Wartung**: Unter "Wartung" lassen sich verwaiste `WGACL_*`-Chains auf
    dem Zielserver finden und entfernen - z.B. wenn ein Client-Datensatz
    direkt in der Datenbank gelöscht wurde statt über "Entfernen" in der UI.

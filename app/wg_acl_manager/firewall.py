@@ -114,7 +114,10 @@ def build_apply_script(client_ip: str, rules: list, hook_chain: str) -> str:
         if proto == "all" or port is None:
             proto_part = ""
         else:
-            proto_part = f"-p {proto} --dport {port} "
+            # Portbereiche werden als "start-end" gespeichert (wie die IP-Bereiche
+            # in config.py), iptables --dport erwartet dafuer aber "start:end".
+            dport = str(port).replace("-", ":")
+            proto_part = f"-p {proto} --dport {dport} "
         lines.append(f'iptables -A {chain} {dest_part}{proto_part}-j ACCEPT'.replace("  ", " "))
 
     lines.append(f'iptables -A {chain} -j DROP')

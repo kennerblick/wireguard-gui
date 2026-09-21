@@ -31,10 +31,21 @@ def add_service():
 
     port = None
     if port_raw:
-        if not port_raw.isdigit() or not (1 <= int(port_raw) <= 65535):
-            flash("Port muss eine Zahl zwischen 1 und 65535 sein.", "error")
+        m = config.SERVICE_PORT_RE.match(port_raw)
+        if not m:
+            flash("Port muss eine Zahl (1-65535) oder ein Bereich wie 2500-3300 sein.", "error")
             return redirect(url_for("services"))
-        port = int(port_raw)
+        start, end = int(m.group(1)), int(m.group(2)) if m.group(2) else None
+        if end is None:
+            if not (1 <= start <= 65535):
+                flash("Port muss eine Zahl zwischen 1 und 65535 sein.", "error")
+                return redirect(url_for("services"))
+            port = start
+        else:
+            if not (1 <= start < end <= 65535):
+                flash("Portbereich muss innerhalb 1-65535 liegen, mit Start kleiner als Ende.", "error")
+                return redirect(url_for("services"))
+            port = f"{start}-{end}"
     if protocol == "all":
         port = None
 

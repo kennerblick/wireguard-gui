@@ -95,24 +95,18 @@ def init_db():
         """
     )
     run_migrations(db)
-    cur = db.execute("SELECT COUNT(*) FROM services")
-    if cur.fetchone()[0] == 0:
-        for name, proto, port in config.BUILTIN_SERVICES:
-            db.execute(
-                "INSERT INTO services (name, protocol, port, is_builtin) VALUES (?, ?, ?, 1)",
-                (name, proto, port),
-            )
     db.commit()
     db.close()
 
 
 def run_migrations(db):
-    """Additive Schema-Aenderungen fuer bereits bestehende Datenbanken.
+    """Additive Schema-/Daten-Aenderungen fuer bereits bestehende Datenbanken.
 
     Fuer eine neu angelegte DB deckt bereits das CREATE TABLE oben alle
     Spalten ab - hier wird nur nachgezogen, was eine schon existierende DB
-    (aelterer Stand) noch nicht hat. Jede Migration prueft vorher, ob sie
-    noetig ist, und ist damit gefahrlos wiederholt ausfuehrbar.
+    (aelterer Stand) noch nicht hat (Schema) bzw. der Standarddienste-Seed
+    (Daten, siehe unten). Jede Migration prueft vorher, ob sie noetig ist,
+    und ist damit gefahrlos wiederholt ausfuehrbar.
 
     Gruppen-Regeln (rules.dest_tag_id) speichern in dest_ip den Sentinel-
     Wert "" statt NULL - das erspart eine riskante Aenderung der
@@ -154,4 +148,16 @@ def run_migrations(db):
         db.execute(
             "ALTER TABLE clients ADD COLUMN system TEXT "
             "CHECK (system IS NULL OR system IN ('windows', 'linux', 'mikrotik'))"
+        )
+
+    # Seed/Nachzug der Standarddienste (config.BUILTIN_SERVICES) - deckt sowohl
+    # eine frische DB (Tabelle leer) als auch neu hinzugekommene Eintraege
+    # (z.B. Veeam) in einer laengst initialisierten DB ab. "INSERT OR IGNORE"
+    # ueberspringt Namen, die bereits existieren (auch falls jemand zufaellig
+    # einen eigenen Dienst gleichen Namens angelegt hat) - kein Ueberschreiben,
+    # rein additiv.
+    for name, proto, port in config.BUILTIN_SERVICES:
+        db.execute(
+            "INSERT OR IGNORE INTO services (name, protocol, port, is_builtin) VALUES (?, ?, ?, 1)",
+            (name, proto, port),
         )
