@@ -59,6 +59,16 @@ def test_build_apply_script_all_protocol_has_no_port_filter():
     assert "iptables -A WGACL_10_250_0_210 -d 10.250.0.1 -j ACCEPT" in script
 
 
+def test_build_apply_script_port_range_uses_iptables_colon_syntax():
+    # Dienste wie "Veeam Data Mover" speichern einen Bereich als "2500-3300"
+    # (wie die IP-Bereiche in config.py) - iptables --dport braucht dafuer
+    # aber "2500:3300", kein Bindestrich.
+    rules = [{"dest_ip": "10.250.0.202", "protocol": "tcp", "port": "2500-3300"}]
+    script = build_apply_script("10.250.0.210", rules, "DOCKER-USER")
+    assert "-p tcp --dport 2500:3300 -j ACCEPT" in script
+    assert "2500-3300" not in script
+
+
 def test_build_apply_script_ensures_established_related_return_rule():
     rules = [{"dest_ip": "10.250.0.12", "protocol": "tcp", "port": 22}]
     script = build_apply_script("10.250.0.210", rules, "DOCKER-USER")

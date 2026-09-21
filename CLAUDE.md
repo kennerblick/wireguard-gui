@@ -144,7 +144,12 @@ auszuschliessen.
 
 **Datenmodell** (SQLite, `/data/db/wgacl.db`):
 - `clients` (wg_ip, label, restricted-Flag)
-- `services` (name, protocol, port; `is_builtin`-Flag schützt Standarddienste vor Löschung)
+- `services` (name, protocol, port; `is_builtin`-Flag schützt Standarddienste vor
+  Löschung) - `port` ist entweder eine einzelne Portzahl, `NULL` (alle Ports,
+  nur bei `protocol = 'all'`) oder ein Bereich als Text `"start-end"` (siehe
+  `config.SERVICE_PORT_RE`); `firewall.build_apply_script()` wandelt einen
+  Bereich beim Bau des iptables-Kommandos in die dort erwartete
+  `start:end`-Schreibweise um
 - `tags` (name) - frei anlegbare Gruppen, z.B. `mikrotik`, `server`
 - `client_tags` (client_id, tag_id) - Many-to-Many, ein Client kann mehreren
   Gruppen angehören

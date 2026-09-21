@@ -36,7 +36,7 @@
             <option value="udp">UDP</option>
             <option value="all">Alle (kein Port-Filter)</option>
         </select>
-        <input type="number" name="port" placeholder="Port (leer = alle Ports)" min="1" max="65535">
+        <input type="text" name="port" placeholder="Port oder Bereich, z.B. 10006 oder 2500-3300 (leer = alle Ports)" pattern="\d{1,5}(-\d{1,5})?">
         <button type="submit" class="btn btn-primary">Hinzufuegen</button>
     </form>
 </section>
