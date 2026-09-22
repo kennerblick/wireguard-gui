@@ -418,6 +418,27 @@ jeweiligen Client aus.
   ueber `PROVISION_SYSLOG_PORT_LINUX`/`PROVISION_SYSLOG_PORT_MIKROTIK`
   (Host wird aus der Ziel-Config abgeleitet, keine eigene Env-Variable
   noetig).
+  **Ubuntu Desktop - umgekehrter Ein-Schritt-Ablauf** (`platform=
+  "ubuntu-desktop"` im UI-Dropdown, eigene Route `/provision/desktop-config`,
+  `provision_desktop_config()`): dreht die sonstige Reihenfolge um, weil ein
+  Desktop-Nutzer (GNOME-Netzwerkeinstellungen/`nmcli connection import`)
+  eher ein fertiges `.conf` zum Importieren erwartet als ein auszufuehrendes
+  Skript. Der Public Key wird hier VOM NUTZER SELBST lokal erzeugt (z.B.
+  `wg genkey | tee privatekey | wg pubkey`) und VOR jeder Registrierung ins
+  Formular eingetragen - Label/IP/Pubkey werden serverseitig genauso
+  validiert wie in `provision_register()`, `register_peer_on_target()` wird
+  direkt in dieser einen Route aufgerufen (kein Zwischenschritt), Typ ist
+  IMMER `kind="client"` (Desktop-Geraete sind nie Router/Server), Tag wird
+  fest auf `linux` gesetzt (dieselbe Gruppe wie das Linux-Server-Skript -
+  bewusst keine eigene `ubuntu-desktop`-Gruppe, da ACL-Regeln nach System
+  nicht nach Formfaktor unterscheiden sollen). **Sicherheitsdesign bleibt
+  gewahrt:** die App sieht auch hier nie einen privaten Schluessel - die
+  zurueckgegebene Config (`provisioning.render_ubuntu_desktop_config()`)
+  traegt `PrivateKey = <HIER_DEINEN_PRIVATEN_SCHLUESSEL_EINTRAGEN>` als
+  bewussten Platzhalter, den der Nutzer vor dem Import selbst ersetzen muss.
+  `routes/provisioning.py:_fetch_hub_context()` buendelt die Hub-Pubkey-/
+  Endpoint-/Netz-CIDR-Ermittlung, die `provision_script()` und diese Route
+  gemeinsam nutzen.
 - **AllowedIPs-Update-Skript** (`/clients/<id>/allowedips-script`, nur fuer
   `system in (windows, linux)`, Download-Link auf der Berechtigungen-Karte):
   wird noetig, sobald nach der Erstregistrierung neue verwaltete Netze
