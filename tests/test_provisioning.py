@@ -202,6 +202,21 @@ def test_render_mikrotik_script_splits_endpoint_host_and_port():
     assert "remote=10.250.0.1 remote-port=5140" in script
 
 
+def test_render_ubuntu_desktop_config_substitutes_tokens_and_placeholders_private_key():
+    conf = provisioning.render_ubuntu_desktop_config(
+        "Mitarbeiter Max", "10.250.0.210", VALID_PUBKEY, "203.0.113.5:51820", "10.250.0.0/24"
+    )
+    assert "@@" not in conf
+    assert "Address = 10.250.0.210/24" in conf
+    assert f"PublicKey = {VALID_PUBKEY}" in conf
+    assert "Endpoint = 203.0.113.5:51820" in conf
+    assert "AllowedIPs = 10.250.0.0/24" in conf
+    # Im Unterschied zu den anderen Plattform-Templates wird hier NIE ein
+    # echter privater Schluessel eingesetzt - diese App sieht ihn nie, der
+    # Public Key kam bereits fertig vom Aufrufer.
+    assert "PrivateKey = <HIER_DEINEN_PRIVATEN_SCHLUESSEL_EINTRAGEN>" in conf
+
+
 def test_register_peer_on_target_builds_expected_script(monkeypatch):
     captured = {}
 

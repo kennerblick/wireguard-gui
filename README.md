@@ -254,6 +254,17 @@ iptables-Grundkonfiguration.
    zugewiesen (`linux`, `windows` oder `mikrotik`, siehe Punkt 10) - so
    lassen sich plattformweite Regeln ("erlaube Zugriff für alle MikroTiks")
    ohne weiteren manuellen Schritt sofort nutzen.
+
+   Für **Ubuntu Desktop** gibt es zusätzlich einen umgekehrten
+   Ein-Schritt-Ablauf ("Public Key zuerst"): Public Key selbst lokal auf dem
+   Desktop erzeugen (z.B. `wg genkey | tee privatekey | wg pubkey >
+   publickey`, oder über die "Netzwerk"-Einstellungen beim Anlegen einer
+   WireGuard-Verbindung) und hier eintragen - der Peer wird sofort
+   registriert, und man bekommt direkt eine fertige, unter "Einstellungen →
+   Netzwerk → VPN → + → Aus Datei importieren..." importierbare
+   `.conf`-Datei zurück. Auch hier gilt: der private Schlüssel wird von
+   dieser App nie gesehen - der `PrivateKey`-Wert in der Datei ist ein
+   Platzhalter und muss vor dem Import durch den eigenen ersetzt werden.
 10. **Gruppen**: Unter "Gruppen" lassen sich beliebige Gruppen (Tags) anlegen,
     umbenennen und löschen - z.B. `mikrotik`, `server`, `buero`. Jeder Client
     kann auf dem Dashboard mehreren Gruppen gleichzeitig zugeordnet werden

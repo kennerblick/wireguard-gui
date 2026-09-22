@@ -25,14 +25,26 @@
         <input type="text" id="p-label" name="label" placeholder="Name, z.B. Mitarbeiter Max" required>
         <input type="text" id="p-ip" name="ip" value="{{ suggested_ip or '' }}" placeholder="Tunnel-IP (vorgeschlagen)" required>
         <label for="p-platform">System:</label>
-        <select id="p-platform" name="platform" required onchange="toggleNetworks()">
+        <select id="p-platform" name="platform" required onchange="togglePlatform()">
             <option value="linux">Linux</option>
             <option value="windows">Windows</option>
             <option value="mikrotik">MikroTik</option>
+            <option value="ubuntu-desktop">Ubuntu Desktop (Public Key zuerst)</option>
         </select>
         <input type="text" id="p-networks" name="networks" placeholder="Verwaltete Netze, z.B. 192.168.88.0/24 (mehrere durch Komma getrennt)">
-        <button type="button" class="btn btn-primary" onclick="downloadScript()">Anleitung herunterladen</button>
+        <input type="text" id="p-desktop-pubkey" placeholder="Public Key, z.B. von 'wg genkey | tee privatekey | wg pubkey'" class="mono" style="display: none;">
+        <button type="button" id="p-download-btn" class="btn btn-primary" onclick="downloadScript()">Anleitung herunterladen</button>
+        <button type="button" id="p-desktop-btn" class="btn btn-primary" style="display: none;" onclick="submitDesktopConfig()">Config herunterladen &amp; registrieren</button>
     </form>
+    <p id="p-desktop-hint" class="muted small" style="display: none;">
+        Public Key selbst lokal auf dem Ubuntu-Rechner erzeugen (z.B. mit
+        <code>wg genkey | tee privatekey | wg pubkey &gt; publickey</code>
+        oder ueber "Einstellungen &rarr; Netzwerk &rarr; VPN &rarr; +" beim
+        Anlegen einer WireGuard-Verbindung), dann hier eintragen. Der Peer
+        wird sofort registriert, und du bekommst eine fertige Config zum
+        Importieren zurueck - der Platzhalter fuer den privaten Schluessel
+        darin muss vor dem Import noch durch deinen eigenen ersetzt werden.
+    </p>
 
     <form id="register-form" method="post" action="{{ url_for('provision_register') }}" class="inline-form" style="display: none;">
         <input type="hidden" name="label" id="r-label">
@@ -43,14 +55,29 @@
         <input type="text" name="pubkey" placeholder="Public Key aus der Anleitung" required class="mono">
         <button type="submit" class="btn btn-primary">Registrieren</button>
     </form>
+
+    <form id="desktop-form" method="post" action="{{ url_for('provision_desktop_config') }}" style="display: none;">
+        <input type="hidden" name="label" id="d-label">
+        <input type="hidden" name="ip" id="d-ip">
+        <input type="hidden" name="pubkey" id="d-pubkey">
+    </form>
 </section>
 
 <script>
 (function () {
     "use strict";
-    window.toggleNetworks = function () {
-        var mikrotik = document.getElementById("p-platform").value === "mikrotik";
+    window.togglePlatform = function () {
+        var platform = document.getElementById("p-platform").value;
+        var mikrotik = platform === "mikrotik";
+        var desktop = platform === "ubuntu-desktop";
         document.getElementById("p-networks").style.display = mikrotik ? "" : "none";
+        document.getElementById("p-desktop-pubkey").style.display = desktop ? "" : "none";
+        document.getElementById("p-desktop-hint").style.display = desktop ? "" : "none";
+        document.getElementById("p-download-btn").style.display = desktop ? "none" : "";
+        document.getElementById("p-desktop-btn").style.display = desktop ? "" : "none";
+        if (desktop) {
+            document.getElementById("register-form").style.display = "none";
+        }
     };
     window.downloadScript = function () {
         var label = document.getElementById("p-label").value.trim();
@@ -73,7 +100,20 @@
         document.getElementById("r-networks").value = networks;
         document.getElementById("register-form").style.display = "";
     };
-    toggleNetworks();
+    window.submitDesktopConfig = function () {
+        var label = document.getElementById("p-label").value.trim();
+        var ip = document.getElementById("p-ip").value.trim();
+        var pubkey = document.getElementById("p-desktop-pubkey").value.trim();
+        if (!label || !ip || !pubkey) {
+            alert("Bitte Name, IP und Public Key ausfuellen.");
+            return;
+        }
+        document.getElementById("d-label").value = label;
+        document.getElementById("d-ip").value = ip;
+        document.getElementById("d-pubkey").value = pubkey;
+        document.getElementById("desktop-form").submit();
+    };
+    togglePlatform();
 })();
 </script>
 

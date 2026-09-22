@@ -28,6 +28,40 @@ def _parse_networks(raw: str):
     return valid, invalid
 
 
+def _fetch_hub_context():
+    """Ermittelt Public Key, Endpoint und Netz-CIDR des Ziel-Servers -
+    gemeinsam benoetigt von allen Script-/Config-Generatoren dieser Seite
+    (provision_script, provision_desktop_config).
+
+    Gibt (hub_pubkey, hub_endpoint, network_cidr, syslog_host, error) zurueck -
+    bei einem Fehler sind die ersten vier Werte None und error ein
+    anzuzeigender Flash-Text.
+    """
+    info = wireguard.fetch_wg_interface_info()
+    address = info.get("address")
+    if not address:
+        return None, None, None, None, "Konnte Subnetz/Interface-Config des Ziels nicht lesen."
+    try:
+        network = ipaddress.ip_interface(address).network
+    except ValueError:
+        return None, None, None, None, f"Ungueltige Address-Zeile in der Ziel-Config: {address!r}"
+
+    ok, hub_pubkey = wireguard.run_on_target(f"wg show {config.TARGET_WG_INTERFACE} public-key")
+    if not ok or not hub_pubkey.strip():
+        return None, None, None, None, f"Konnte Public Key des Ziel-Servers nicht ermitteln: {hub_pubkey}"
+    hub_pubkey = hub_pubkey.strip()
+
+    hub_endpoint = config.WG_SERVER_ENDPOINT
+    if ":" not in hub_endpoint:
+        return None, None, None, None, (
+            "WG_SERVER_ENDPOINT ist nicht (korrekt, Format host:port) gesetzt - "
+            "wird fuer die Client-Config benoetigt."
+        )
+
+    syslog_host = str(ipaddress.ip_interface(address).ip)
+    return hub_pubkey, hub_endpoint, str(network), syslog_host, None
+
+
 @app.route("/provision")
 def provision():
     db = get_db()
@@ -53,35 +87,12 @@ def provision_script():
         flash(f"Ungueltige IP: {ip_raw!r}", "error")
         return redirect(url_for("provision"))
 
-    info = wireguard.fetch_wg_interface_info()
-    address = info.get("address")
-    if not address:
-        flash("Konnte Subnetz/Interface-Config des Ziels nicht lesen.", "error")
-        return redirect(url_for("provision"))
-    try:
-        network = ipaddress.ip_interface(address).network
-    except ValueError:
-        flash(f"Ungueltige Address-Zeile in der Ziel-Config: {address!r}", "error")
+    hub_pubkey, hub_endpoint, network_cidr, syslog_host, error = _fetch_hub_context()
+    if error:
+        flash(error, "error")
         return redirect(url_for("provision"))
 
-    ok, hub_pubkey = wireguard.run_on_target(f"wg show {config.TARGET_WG_INTERFACE} public-key")
-    if not ok or not hub_pubkey.strip():
-        flash(f"Konnte Public Key des Ziel-Servers nicht ermitteln: {hub_pubkey}", "error")
-        return redirect(url_for("provision"))
-    hub_pubkey = hub_pubkey.strip()
-
-    hub_endpoint = config.WG_SERVER_ENDPOINT
-    if ":" not in hub_endpoint:
-        flash(
-            "WG_SERVER_ENDPOINT ist nicht (korrekt, Format host:port) gesetzt - "
-            "wird fuer die Client-Config benoetigt.",
-            "error",
-        )
-        return redirect(url_for("provision"))
-
-    syslog_host = str(ipaddress.ip_interface(address).ip)
     ip_str = str(ip_obj)
-    network_cidr = str(network)
     managed_networks, invalid_networks = _parse_networks(request.args.get("networks", ""))
     if invalid_networks:
         flash(f"Ungueltige verwaltete Netze ignoriert: {', '.join(invalid_networks)}", "error")
@@ -231,3 +242,67 @@ def provision_register():
             "success",
         )
     return redirect(url_for("provision"))
+
+
+@app.route("/provision/desktop-config", methods=["POST"])
+def provision_desktop_config():
+    """Umgekehrter Ablauf fuer Ubuntu Desktop: der Public Key wird lokal auf
+    dem Desktop selbst erzeugt (z.B. "wg genkey | tee privatekey | wg
+    pubkey") und hier VOR jeder Registrierung eingetragen - im Unterschied
+    zum sonstigen Zwei-Schritte-Assistenten (provision_script erzeugt ein
+    Skript, das den Key selbst erzeugt und ausgibt; provision_register nimmt
+    ihn danach entgegen). Registriert den Peer in einem Schritt und liefert
+    direkt eine fertige, in Ubuntus Netzwerkeinstellungen importierbare
+    wg-quick-Config zurueck (PrivateKey bleibt darin ein Platzhalter - siehe
+    provisioning.render_ubuntu_desktop_config()).
+    """
+    db = get_db()
+    label = request.form.get("label", "").strip()
+    ip_raw = request.form.get("ip", "").strip()
+    pubkey_raw = request.form.get("pubkey", "").strip()
+
+    if not config.LABEL_RE.match(label):
+        flash("Ungueltiger Name (erlaubt: Buchstaben, Zahlen, Leerzeichen, . _ - ( )).", "error")
+        return redirect(url_for("provision"))
+    try:
+        ip_obj = ipaddress.ip_address(ip_raw)
+    except ValueError:
+        flash(f"Ungueltige IP: {ip_raw!r}", "error")
+        return redirect(url_for("provision"))
+    pubkey = provisioning.validate_wg_pubkey(pubkey_raw)
+    if pubkey is None:
+        flash("Ungueltiger Public Key (muss ein Base64-kodierter 32-Byte-Wert sein).", "error")
+        return redirect(url_for("provision"))
+
+    hub_pubkey, hub_endpoint, network_cidr, _syslog_host, error = _fetch_hub_context()
+    if error:
+        flash(error, "error")
+        return redirect(url_for("provision"))
+
+    ok, out = provisioning.register_peer_on_target(pubkey, str(ip_obj), label)
+    if not ok:
+        flash(f"Peer-Registrierung auf dem Server fehlgeschlagen: {out}", "error")
+        return redirect(url_for("provision"))
+
+    try:
+        db.execute(
+            "INSERT INTO clients (wg_ip, label, restricted, kind, system) VALUES (?, ?, 1, 'client', 'linux')",
+            (str(ip_obj), label),
+        )
+        db.commit()
+        client_id = db.execute("SELECT id FROM clients WHERE wg_ip = ?", (str(ip_obj),)).fetchone()["id"]
+        tag_id = tags.get_or_create_tag(db, config.PROVISION_PLATFORM_TAGS["linux"])
+        tags.set_client_tags(db, client_id, {tag_id})
+    except sqlite3.IntegrityError:
+        # Peer ist bereits auf dem Server registriert (siehe oben) - ein
+        # Client mit dieser IP existierte in der App schon, Datensatz bleibt
+        # unveraendert. Die Config wird trotzdem ausgeliefert, siehe
+        # provision_register fuer die gleiche Semantik im Zwei-Schritte-Fall.
+        pass
+
+    content = provisioning.render_ubuntu_desktop_config(label, str(ip_obj), hub_pubkey, hub_endpoint, network_cidr)
+    return Response(
+        content,
+        mimetype="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{label}.conf"'},
+    )

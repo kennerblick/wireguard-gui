@@ -402,6 +402,46 @@ def render_linux_allowedips_update(allowed_ips_csv):
     )
 
 
+UBUNTU_DESKTOP_CONFIG_TEMPLATE = """# @@LABEL@@.conf - fuer Ubuntu Desktop
+# (Einstellungen -> Netzwerk -> VPN -> "+" -> "Aus Datei importieren...",
+# oder: nmcli connection import type wireguard file @@LABEL@@.conf)
+#
+# Dieser Weg dreht die sonst uebliche Reihenfolge um: statt eines Skripts,
+# das das Schluesselpaar selbst erzeugt, hast du den Public Key unten
+# bereits VOR dem Herunterladen dieser Datei selbst lokal erzeugt (z.B.
+# mit "wg genkey | tee privatekey | wg pubkey > publickey") und in
+# wg-acl-manager eingetragen - der Peer ist mit diesem Public Key bereits
+# auf dem Server registriert.
+#
+# WICHTIG: wg-acl-manager sieht und speichert NIEMALS private Schluessel -
+# PrivateKey unten ist deshalb bewusst ein Platzhalter. Vor dem Import
+# durch deinen lokal erzeugten privaten Schluessel ersetzen (die Datei mit
+# einem Texteditor oeffnen), oder ihn nach dem Import in den
+# VPN-Verbindungseinstellungen von Ubuntu manuell eintragen.
+
+[Interface]
+PrivateKey = <HIER_DEINEN_PRIVATEN_SCHLUESSEL_EINTRAGEN>
+Address = @@IP@@/24
+
+[Peer]
+PublicKey = @@HUB_PUBKEY@@
+Endpoint = @@HUB_ENDPOINT@@
+AllowedIPs = @@NETWORK_CIDR@@
+PersistentKeepalive = 25
+"""
+
+
+def render_ubuntu_desktop_config(label, ip, hub_pubkey, hub_endpoint, network_cidr):
+    return _fill_template(
+        UBUNTU_DESKTOP_CONFIG_TEMPLATE,
+        LABEL=label,
+        IP=ip,
+        HUB_PUBKEY=hub_pubkey,
+        HUB_ENDPOINT=hub_endpoint,
+        NETWORK_CIDR=network_cidr,
+    )
+
+
 def render_mikrotik_script(label, ip, hub_pubkey, hub_endpoint, network_cidr, syslog_host, managed_networks=None):
     endpoint_host, _, endpoint_port = hub_endpoint.rpartition(":")
     syslog_block = ""
